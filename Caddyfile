@@ -1,13 +1,11 @@
 {
 	debug
   admin off
-	filesystem sitezip vfs "_data/site.zip" /dist
+	filesystem sitezip vfs "_data/site.zip" /
 }
 
 :3838 {
 	fs sitezip
-	redir /app /app/
-	uri strip_prefix /app/
 	try_files {path} /
 	file_server browse {
 	}
