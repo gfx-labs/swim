@@ -1,0 +1,15 @@
+{
+  debug
+  filesystem app swim "https://gfx.cafe/api/v4/projects/222/jobs/93305/artifacts" /dist .zip {
+    header PRIVATE-TOKEN {$GITLAB_TOKEN}
+  }
+}
+:3838
+{
+  fs app
+  redir /app /app/
+  uri strip_prefix /app/
+  try_files {path} /
+  file_server browse {
+  }
+}

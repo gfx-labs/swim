@@ -1,0 +1,14 @@
+.bin
+.log
+.db
+*.exe
+
+.tmp
+
+target
+
+.idea
+
+node_modules
+yarn-error.log
+
