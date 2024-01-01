@@ -6,5 +6,4 @@ swim is a package containing multiple caddy modules which are used to host stati
 
 while it originally was its own binary, it has now been packaged as caddy modules. it is still however just as embeddable.
 
-
-
+it depends on https://github.com/caddyserver/caddy/pull/5833
