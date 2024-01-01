@@ -13,7 +13,7 @@ import (
 
 func activate() {
 
-	caddy.RegisterModule(&vfs.SwimVfs{})
+	caddy.RegisterModule(&vfs.Vfs{})
 	caddy.RegisterModule(&prerender.Prerender{})
 	httpcaddyfile.RegisterHandlerDirective("prerender_io", prerender.ParseCaddyFile)
 
