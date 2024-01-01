@@ -1,6 +1,7 @@
 {
 	debug
-	filesystem sitezip swim "_data/site.zip" /dist
+  admin off
+	filesystem sitezip vfs "_data/site.zip" /dist
 }
 
 :3838 {
