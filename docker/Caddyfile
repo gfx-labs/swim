@@ -1,0 +1,12 @@
+{
+	debug
+  admin off
+	filesystem sitezip vfs "/data/archive.zip" /
+}
+
+:80 {
+	fs sitezip
+	try_files {path} /
+	file_server browse {
+	}
+}
