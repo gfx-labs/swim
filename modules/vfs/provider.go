@@ -5,7 +5,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/spf13/afero"
 )
 
@@ -89,5 +94,64 @@ func (o *Overlay) openHttp(u *url.URL) (afero.Fs, error) {
 		return nil, err
 	}
 	return fs, nil
+}
 
+func (o *Overlay) headerOrEnv(key string) string {
+	x := o.Headers.Get(key)
+	if x == "" {
+		x = os.Getenv(key)
+	}
+	return x
+
+}
+func (o *Overlay) openS3(u *url.URL) (afero.Fs, error) {
+	accessKeyId := o.headerOrEnv("AWS_ACCESS_KEY_ID")
+	secretAccessKey := o.headerOrEnv("AWS_SECRET_ACCESS_KEY")
+	usePathStyle := o.headerOrEnv("AWS_USE_PATH_STYLE")
+	bucketName := o.headerOrEnv("AWS_BUCKET_NAME")
+	endpointUrl := o.headerOrEnv("AWS_ENDPOINT_URL")
+	if endpointUrl == "" {
+		endpointUrl = u.Scheme + "://" + u.Host
+	}
+	region := o.headerOrEnv("AWS_DEFAULT_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
+	var pathStyle *bool
+	switch strings.ToLower(usePathStyle) {
+	case "true", "t", "yes":
+		pathStyle = aws.Bool(true)
+	case "false", "f", "no":
+		pathStyle = aws.Bool(false)
+	}
+
+	s3Config := &aws.Config{
+		Credentials:      credentials.NewStaticCredentials(accessKeyId, secretAccessKey, ""),
+		Endpoint:         aws.String(endpointUrl),
+		S3ForcePathStyle: pathStyle,
+		Region:           aws.String(region),
+	}
+	sess, err := session.NewSession(s3Config)
+	if err != nil {
+		return nil, err
+	}
+	s3Client := s3.New(sess)
+	oo, err := s3Client.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(bucketName),
+		Key:    aws.String(u.Path),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer oo.Body.Close()
+	ft := o.Type
+	// TODO: perhaps we can also introspect via http content type?
+	if ft == "" {
+		ft = filetypeFromName(u.String())
+	}
+	fs, err := filesystemFromReader(ft, oo.Body)
+	if err != nil {
+		return nil, err
+	}
+	return fs, nil
 }
