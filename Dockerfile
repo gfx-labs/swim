@@ -25,6 +25,6 @@ WORKDIR /srv
 copy --from=builder /wd/caddy /usr/local/bin/caddy
 
 copy docker/Caddyfile /etc/caddy/Caddyfile
-copy docker/archive.zip /data/archive.zip
+copy docker/archive.tar.gz /data/archive.tar.gz
 
 CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]

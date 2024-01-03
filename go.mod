@@ -2,7 +2,7 @@ module github.com/gfx-labs/swim
 
 go 1.21.3
 
-replace github.com/caddyserver/caddy/v2 => github.com/elee1766/caddy/v2 v2.0.0-20240101062501-dbec5dfdc9c2
+replace github.com/caddyserver/caddy/v2 => github.com/elee1766/caddy/v2 v2.0.0-20240102124351-0acab3199aab
 
 require (
 	github.com/caddyserver/caddy/v2 v2.7.6

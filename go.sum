@@ -134,8 +134,8 @@ github.com/eapache/go-resiliency v1.1.0/go.mod h1:kFI+JgMyC7bLPUVY133qvEBtVayf5m
 github.com/eapache/go-xerial-snappy v0.0.0-20180814174437-776d5712da21/go.mod h1:+020luEh2TKB4/GOp8oxxtq0Daoen/Cii55CzbTV6DU=
 github.com/eapache/queue v1.1.0/go.mod h1:6eCeP0CKFpHLu8blIFXhExK/dRa7WDZfr6jVFPTqq+I=
 github.com/edsrzf/mmap-go v1.0.0/go.mod h1:YO35OhQPt3KJa3ryjFM5Bs14WD66h8eGKpfaBNrHW5M=
-github.com/elee1766/caddy/v2 v2.0.0-20240101062501-dbec5dfdc9c2 h1:ke/Y/j4+nN7fJQ5NWXxzidLn7lv9Z228HF5XuPgI8wY=
-github.com/elee1766/caddy/v2 v2.0.0-20240101062501-dbec5dfdc9c2/go.mod h1:Hpm/Hj8RYtxFT0fdCdpUjXR1wE7jcEvpwG3WNLy4xbM=
+github.com/elee1766/caddy/v2 v2.0.0-20240102124351-0acab3199aab h1:sdp3Bm97VkUFlOasUuUD5zpGQ6GO3W3OsNjML3Vn1dA=
+github.com/elee1766/caddy/v2 v2.0.0-20240102124351-0acab3199aab/go.mod h1:Hpm/Hj8RYtxFT0fdCdpUjXR1wE7jcEvpwG3WNLy4xbM=
 github.com/envoyproxy/go-control-plane v0.6.9/go.mod h1:SBwIajubJHhxtWwsL9s8ss4safvEdbitLhGGK48rN6g=
 github.com/envoyproxy/go-control-plane v0.9.1-0.20191026205805-5f8ba28d4473/go.mod h1:YTl/9mNaCwkRvm6d1a2C3ymFceY/DCBVvsKhRF0iEA4=
 github.com/envoyproxy/protoc-gen-validate v0.1.0/go.mod h1:iSmxcyjqTsJpI2R4NaDN7+kN2VEUnK/pcBlmesArF7c=
