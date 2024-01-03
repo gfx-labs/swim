@@ -8,6 +8,7 @@ import (
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/spf13/afero"
+	"go.uber.org/zap"
 )
 
 var _ fs.FS = (*Vfs)(nil)
@@ -16,6 +17,9 @@ type Vfs struct {
 	Overlay *Overlay `json:"overlay"`
 
 	a afero.Fs
+
+	log *zap.Logger
+
 	fs.FS
 	closers []func()
 }
@@ -49,6 +53,8 @@ func (s *Vfs) CaddyModule() caddy.ModuleInfo {
 }
 
 func (s *Vfs) Provision(ctx caddy.Context) error {
+	s.log = ctx.Logger()
+	s.log.Debug("initializing vfs", zap.Any("fs", s.Overlay))
 	srv, err := s.Overlay.OpenFilesystem()
 	if err != nil {
 		return fmt.Errorf("initialize overlay %s: %w", s.Overlay.String(), err)

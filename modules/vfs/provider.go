@@ -14,7 +14,11 @@ func (o *Overlay) OpenFilesystem() (afero.Fs, error) {
 	if err != nil {
 		return nil, err
 	}
-	return afero.NewBasePathFs(fs, o.WorkDir), nil
+	wd := o.WorkDir
+	if wd == "" {
+		wd = "/"
+	}
+	return afero.NewBasePathFs(fs, wd), nil
 }
 
 // opens the filesystem before changing the working dir
@@ -24,12 +28,13 @@ func (o *Overlay) openRawFilesystem() (afero.Fs, error) {
 		return nil, err
 	}
 	switch u.Scheme {
-	case "file://", "":
+	case "file", "":
 		return o.openFile(u)
-	case "http://", "https://":
+	case "http", "https":
 		return o.openHttp(u)
+	default:
+		return nil, fmt.Errorf("unrecognized scheme: %s", u.Scheme)
 	}
-	return nil, nil
 }
 
 func (o *Overlay) openFile(u *url.URL) (afero.Fs, error) {
