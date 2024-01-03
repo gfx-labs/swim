@@ -3,21 +3,20 @@ package vfs
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 )
 
 type Overlay struct {
-	Fs      string      `json:"root,omitempty"`
-	Home    string      `json:"home,omitempty"`
+	Root    string      `json:"root,omitempty"`
+	WorkDir string      `json:"workdir,omitempty"`
 	Type    string      `json:"type,omitempty"`
 	Headers http.Header `json:"request_headers"`
-
-	Overlays []*Overlay `json:"overlays"`
 }
 
 func (co *Overlay) String() string {
-	return fmt.Sprintf("root=%s home=%s type=%s", co.Fs, co.Home, co.Type)
+	return fmt.Sprintf("root=%s home=%s type=%s", co.Root, co.WorkDir, co.Type)
 }
 
 func (co *Overlay) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
@@ -26,11 +25,11 @@ func (co *Overlay) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	}
 	if d.NextArg() {
 		// optional arg
-		co.Fs = d.Val()
+		co.Root = d.Val()
 	}
 	if d.NextArg() {
 		// optional arg
-		co.Home = d.Val()
+		co.WorkDir = d.Val()
 	}
 	if d.NextArg() {
 		// optional arg
@@ -38,15 +37,15 @@ func (co *Overlay) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	}
 	for nesting := d.Nesting(); d.NextBlock(nesting); {
 		vKey := d.Val()
-		switch vKey {
+		switch strings.ToLower(vKey) {
 		case "header":
 			var k, v string
 			if !d.Args(&k, &v) {
 				return d.ArgErr()
 			}
 			co.Headers.Add(k, v)
-		case "home":
-			if !d.Args(&co.Home) {
+		case "workdir":
+			if !d.Args(&co.WorkDir) {
 				// not enough args
 				return d.ArgErr()
 			}
@@ -56,15 +55,9 @@ func (co *Overlay) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				return d.ArgErr()
 			}
 		case "root":
-			if !d.Args(&co.Fs) {
+			if !d.Args(&co.Root) {
 				// not enough args
 				return d.ArgErr()
-			}
-		case "overlay":
-			n := &Overlay{}
-			co.Overlays = append(co.Overlays, n)
-			if err := n.UnmarshalCaddyfile(d); err != nil {
-				return err
 			}
 		default:
 			return d.SyntaxErr("invalid overlay option: " + vKey)

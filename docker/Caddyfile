@@ -1,6 +1,6 @@
 {
 	debug
-  admin off
+	admin off
 	filesystem sitezip vfs "/data/archive.tar.gz" /
 }
 
