@@ -18,7 +18,6 @@ builds:
     goamd64: ["v2"]
     goos:
       - linux
-      - windows
       - darwin
 
 dockers:
@@ -56,9 +55,6 @@ archives:
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
       {{- if .Arm }}v{{ .Arm }}{{ end }}
-    format_overrides:
-      - goos: windows
-        format: zip
 
 changelog:
   sort: asc
