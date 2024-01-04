@@ -33,8 +33,6 @@ dockers:
       - "gfxlabs/swim:{{ .Tag }}"
       - "gfxlabs/swim:{{ .Tag }}-{{ .Env.FOOBAR }}"
       - "gfxlabs/swim:v{{ .Major }}"
-    skip_build: false
-    skip_push: false
     dockerfile: "{{ .Env.DOCKERFILE }}"
     use: docker
     build_flag_templates:
