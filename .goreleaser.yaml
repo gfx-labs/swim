@@ -15,6 +15,7 @@ before:
 builds:
   - env:
       - CGO_ENABLED=0
+    goamd64: ["v2"]
     goos:
       - linux
       - windows
@@ -43,10 +44,6 @@ dockers:
       - "--platform=linux/arm64"
     extra_files:
       - docker
-      - modules
-      - go.mod
-      - go.sum
-      - main.go
 
 archives:
   - format: tar.gz
