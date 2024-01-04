@@ -40,7 +40,6 @@ dockers:
       - "--label=org.opencontainers.image.title={{.ProjectName}}"
       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
       - "--label=org.opencontainers.image.version={{.Version}}"
-      - "--build-arg=FOO={{.Env.Bar}}"
       - "--platform=linux/arm64"
     extra_files:
       - docker
