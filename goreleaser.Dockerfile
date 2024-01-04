@@ -1,10 +1,3 @@
-FROM golang:1.21-alpine as builder
-WORKDIR /wd
-COPY go.mod go.sum main.go .
-RUN go mod download
-COPY modules modules
-RUN go build -o caddy .
-
 from alpine:latest
 
 RUN apk add --no-cache \
@@ -22,7 +15,8 @@ EXPOSE 2019
 
 WORKDIR /srv
 
-copy --from=builder /wd/caddy /usr/local/bin/caddy
+copy dist/swim_linux_amd64_v2/swim /usr/local/bin/caddy
+RUN cp /usr/local/bin/caddy /usr/local/bin/swim
 
 copy docker/Caddyfile /etc/caddy/Caddyfile
 copy docker/archive.tar.gz /data/archive.tar.gz

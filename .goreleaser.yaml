@@ -33,7 +33,7 @@ dockers:
       - "gfxlabs/swim:latest"
       - "gfxlabs/swim:{{ .Tag }}"
       - "gfxlabs/swim:v{{ .Major }}"
-    dockerfile: "Dockerfile"
+    dockerfile: "goreleaser.Dockerfile"
     use: docker
     build_flag_templates:
       - "--pull"
@@ -41,7 +41,7 @@ dockers:
       - "--label=org.opencontainers.image.title={{.ProjectName}}"
       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
       - "--label=org.opencontainers.image.version={{.Version}}"
-      - "--platform=linux/arm64"
+      - "--platform=linux/amd64"
     extra_files:
       - dist/swim_linux_amd64_v2/swim
       - docker
