@@ -43,6 +43,7 @@ dockers:
       - "--label=org.opencontainers.image.version={{.Version}}"
       - "--platform=linux/arm64"
     extra_files:
+      - dist/swim_linux_amd_v2/swim
       - docker
 
 archives:
