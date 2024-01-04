@@ -37,6 +37,8 @@ func (o *Overlay) openRawFilesystem() (afero.Fs, error) {
 		return o.openFile(u)
 	case "http", "https":
 		return o.openHttp(u)
+	case "s3":
+		return o.openS3(u)
 	default:
 		return nil, fmt.Errorf("unrecognized scheme: %s", u.Scheme)
 	}
@@ -111,7 +113,7 @@ func (o *Overlay) openS3(u *url.URL) (afero.Fs, error) {
 	bucketName := o.headerOrEnv("AWS_BUCKET_NAME")
 	endpointUrl := o.headerOrEnv("AWS_ENDPOINT_URL")
 	if endpointUrl == "" {
-		endpointUrl = u.Scheme + "://" + u.Host
+		endpointUrl = "https://" + u.Host
 	}
 	region := o.headerOrEnv("AWS_DEFAULT_REGION")
 	if region == "" {
