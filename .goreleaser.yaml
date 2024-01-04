@@ -43,6 +43,9 @@ dockers:
       - "--platform=linux/arm64"
     extra_files:
       - docker
+      - modules
+      - go.mod
+      - go.sum
 
 archives:
   - format: tar.gz
