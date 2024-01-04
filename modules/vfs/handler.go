@@ -55,12 +55,14 @@ func (s *Vfs) CaddyModule() caddy.ModuleInfo {
 func (s *Vfs) Provision(ctx caddy.Context) error {
 	s.log = ctx.Logger()
 	s.log.Debug("initializing vfs", zap.Any("fs", s.Overlay))
+	s.Overlay.resolvePlaceholders()
 	srv, err := s.Overlay.OpenFilesystem()
 	if err != nil {
 		return fmt.Errorf("initialize overlay %s: %w", s.Overlay.String(), err)
 	}
 	s.a = srv
 	s.FS = afero.NewIOFS(s.a)
+
 	return nil
 }
 

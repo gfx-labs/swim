@@ -14,6 +14,17 @@ import (
 	"github.com/spf13/afero"
 )
 
+func (o *Overlay) resolvePlaceholders() {
+	for k, v := range o.Headers {
+		for i, x := range v {
+			v[i] = rp.ReplaceAll(x, "")
+		}
+		o.Headers[k] = v
+	}
+	o.WorkDir = rp.ReplaceAll(o.WorkDir, "")
+	o.Type = rp.ReplaceAll(o.Type, "")
+	o.Root = rp.ReplaceAll(o.Root, "")
+}
 func (o *Overlay) OpenFilesystem() (afero.Fs, error) {
 	fs, err := o.openRawFilesystem()
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 )
 
@@ -18,6 +19,8 @@ type Overlay struct {
 func (co *Overlay) String() string {
 	return fmt.Sprintf("root=%s home=%s type=%s", co.Root, co.WorkDir, co.Type)
 }
+
+var rp = caddy.NewReplacer()
 
 func (co *Overlay) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	if co.Headers == nil {

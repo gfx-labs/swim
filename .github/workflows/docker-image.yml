@@ -12,6 +12,7 @@ on:
       - 'master'
   release:
     types: [published]
+
 jobs:
   docker:
     runs-on: ubuntu-latest
