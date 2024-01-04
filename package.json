@@ -1,0 +1,14 @@
+{
+  "devDependencies": {
+    "@semantic-release/commit-analyzer": "^11.1.0",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^9.2.6",
+    "@semantic-release/release-notes-generator": "^12.1.0",
+    "conventional-changelog-conventionalcommits": "^7.0.2"
+  },
+  "name": "swim",
+  "version": "0.0.0",
+  "repository": "git@github.com:gfx-labs/swim",
+  "author": "a <a@tuxpa.in>",
+  "license": "MIT"
+}
