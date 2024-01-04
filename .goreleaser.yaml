@@ -46,6 +46,7 @@ dockers:
       - modules
       - go.mod
       - go.sum
+      - main.go
 
 archives:
   - format: tar.gz
