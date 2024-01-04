@@ -31,7 +31,6 @@ dockers:
     image_templates:
       - "gfxlabs/swim:latest"
       - "gfxlabs/swim:{{ .Tag }}"
-      - "gfxlabs/swim:{{ .Tag }}-{{ .Env.FOOBAR }}"
       - "gfxlabs/swim:v{{ .Major }}"
     dockerfile: "{{ .Env.DOCKERFILE }}"
     use: docker
