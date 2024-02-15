@@ -31,6 +31,7 @@ dockers:
     image_templates:
       - "gfxlabs/swim:latest"
       - "gfxlabs/swim:{{ .Tag }}"
+      - "gfxlabs/swim:v{{ .Major }}.{{.Minor}}"
       - "gfxlabs/swim:v{{ .Major }}"
     dockerfile: "goreleaser.Dockerfile"
     use: docker
