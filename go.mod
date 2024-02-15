@@ -5,6 +5,7 @@ go 1.21.3
 require (
 	github.com/aws/aws-sdk-go v1.49.14
 	github.com/caddyserver/caddy/v2 v2.7.6-0.20240213184538-2c48dda109d2
+	github.com/guilhem/bump v0.2.1
 	github.com/spf13/afero v1.11.0
 	go.uber.org/zap v1.26.0
 )
@@ -59,7 +60,6 @@ require (
 	github.com/google/pprof v0.0.0-20240207164012-fb44976bdcd5 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.18.0 // indirect
-	github.com/guilhem/bump v0.2.1 // indirect
 	github.com/huandu/xstrings v1.3.3 // indirect
 	github.com/imdario/mergo v0.3.12 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
