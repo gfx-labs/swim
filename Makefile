@@ -1,4 +1,4 @@
-VERSION=1.1.1
+VERSION=v1.1.1
 
 release:
 	unset GITLAB_TOKEN
