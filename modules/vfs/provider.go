@@ -34,7 +34,13 @@ func (o *Overlay) OpenFilesystem() (afero.Fs, error) {
 	if wd == "" {
 		wd = "/"
 	}
-	return afero.NewBasePathFs(fs, wd), nil
+	ofs := afero.NewBasePathFs(fs, wd)
+	ofs = afero.NewReadOnlyFs(afero.NewCacheOnReadFs(
+		ofs,
+		afero.NewMemMapFs(),
+		0,
+	))
+	return ofs, nil
 }
 
 // opens the filesystem before changing the working dir

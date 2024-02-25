@@ -40,7 +40,7 @@ func (s *Vfs) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 
 func (s *Vfs) Open(name string) (fs.File, error) {
 	name = strings.Trim(name, "/")
-	return afero.NewIOFS(s.a).Open(name)
+	return s.FS.Open(name)
 }
 
 func (s *Vfs) CaddyModule() caddy.ModuleInfo {
