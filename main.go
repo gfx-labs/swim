@@ -1,24 +1,13 @@
 package main
 
 import (
-	"github.com/caddyserver/caddy/v2"
-	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
-	caddycmd "github.com/caddyserver/caddy/v2/cmd"
-	"github.com/gfx-labs/swim/modules/prerender"
-	"github.com/gfx-labs/swim/modules/vfs"
+	_ "github.com/gfx-labs/swim/plugin"
 
 	// plug in Caddy modules here
+	caddycmd "github.com/caddyserver/caddy/v2/cmd"
 	_ "github.com/caddyserver/caddy/v2/modules/standard"
 )
 
-func activate() {
-
-	caddy.RegisterModule(&vfs.Vfs{})
-	caddy.RegisterModule(&prerender.Prerender{})
-	httpcaddyfile.RegisterHandlerDirective("prerender_io", prerender.ParseCaddyFile)
-
-}
 func main() {
-	activate()
 	caddycmd.Main()
 }
