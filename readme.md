@@ -23,7 +23,7 @@ the vfs plugin allows using archives, either on local fs, s3, or accessed via ht
 ```
 {
 	admin off
-	filesystem sitezip vfs "/data/archive.tar.gz" /
+	filesystem sitezip vfs "https://cdn.gfx.xyz/archive.tar.gz" /
 }
 
 :8000 {
