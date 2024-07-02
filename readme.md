@@ -7,7 +7,6 @@ swim is a package containing multiple caddy modules which are used to host stati
 while it originally was its own program, it has now been packaged into caddy modules.
 
 
-
 # modules
 
 
@@ -35,6 +34,13 @@ the vfs plugin allows using archives, either on local fs, s3, or accessed via ht
 
 it depends on https://github.com/caddyserver/caddy/pull/5833
 
+## localfs
+
+```
+github.com/gfx-labs/swim/plugin/localfs
+```
+
+this is a simple local fs
 
 ## prerender
 
