@@ -1,8 +1,9 @@
-FROM golang:1.21-alpine as builder
+FROM golang:1.23-alpine as builder
 WORKDIR /wd
 COPY go.mod go.sum main.go .
 RUN go mod download
 COPY modules modules
+COPY plugin plugin
 RUN go build -o caddy .
 
 from alpine:latest
