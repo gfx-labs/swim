@@ -26,8 +26,6 @@ dockers:
     goarch: amd64
     goarm: ""
     goamd64: "v2"
-    ids:
-      - github
     image_templates:
       - "gfxlabs/swim:latest"
       - "gfxlabs/swim:{{ .Tag }}"
