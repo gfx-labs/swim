@@ -20,7 +20,6 @@ func (c CrawlerUserAgents) Contains(x string) bool {
 		}
 	}
 	return false
-
 }
 
 type FileTypes []string
@@ -36,7 +35,6 @@ func (c FileTypes) Contains(x string) bool {
 		}
 	}
 	return false
-
 }
 
 var defaultCrawlerUserAgents = [...]string{
@@ -73,6 +71,7 @@ var defaultCrawlerUserAgents = [...]string{
 	"Bitrix link preview",
 	"XING-contenttabreceiver",
 	"Chrome-Lighthouse",
+	"KiwiNewsBot",
 }
 
 var defaultSkippedTypes = [...]string{
