@@ -7,10 +7,12 @@ import (
 	"os"
 	"strings"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
+	"context"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/spf13/afero"
 )
 
@@ -124,6 +126,7 @@ func (o *Overlay) headerOrEnv(key string) string {
 
 }
 func (o *Overlay) openS3(u *url.URL) (afero.Fs, error) {
+	ctx := context.Background()
 	accessKeyId := o.headerOrEnv("AWS_ACCESS_KEY_ID")
 	secretAccessKey := o.headerOrEnv("AWS_SECRET_ACCESS_KEY")
 	usePathStyle := o.headerOrEnv("AWS_USE_PATH_STYLE")
@@ -136,26 +139,36 @@ func (o *Overlay) openS3(u *url.URL) (afero.Fs, error) {
 	if region == "" {
 		region = "us-east-1"
 	}
-	var pathStyle *bool
-	switch strings.ToLower(usePathStyle) {
-	case "true", "t", "yes":
-		pathStyle = aws.Bool(true)
-	case "false", "f", "no":
-		pathStyle = aws.Bool(false)
-	}
 
-	s3Config := &aws.Config{
-		Credentials:      credentials.NewStaticCredentials(accessKeyId, secretAccessKey, ""),
-		Endpoint:         aws.String(endpointUrl),
-		S3ForcePathStyle: pathStyle,
-		Region:           aws.String(region),
-	}
-	sess, err := session.NewSession(s3Config)
+	// Create config with static credentials
+	cfg, err := config.LoadDefaultConfig(ctx,
+		config.WithRegion(region),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKeyId, secretAccessKey, "")),
+	)
 	if err != nil {
 		return nil, err
 	}
-	s3Client := s3.New(sess)
-	oo, err := s3Client.GetObject(&s3.GetObjectInput{
+
+	// Create S3 client with options including custom endpoint resolver
+	opts := []func(*s3.Options){
+		func(o *s3.Options) {
+			o.BaseEndpoint = aws.String(endpointUrl)
+		},
+	}
+	
+	switch strings.ToLower(usePathStyle) {
+	case "true", "t", "yes":
+		opts = append(opts, func(o *s3.Options) {
+			o.UsePathStyle = true
+		})
+	case "false", "f", "no":
+		opts = append(opts, func(o *s3.Options) {
+			o.UsePathStyle = false
+		})
+	}
+
+	s3Client := s3.NewFromConfig(cfg, opts...)
+	oo, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucketName),
 		Key:    aws.String(u.Path),
 	})

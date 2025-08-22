@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
@@ -55,6 +56,7 @@ func (s *Vfs) CaddyModule() caddy.ModuleInfo {
 func (s *Vfs) Provision(ctx caddy.Context) error {
 	s.log = ctx.Logger()
 	s.log.Debug("initializing vfs", zap.Any("fs", s.Overlay))
+	start := time.Now()
 	s.Overlay.resolvePlaceholders()
 	srv, err := s.Overlay.OpenFilesystem()
 	if err != nil {
@@ -62,6 +64,7 @@ func (s *Vfs) Provision(ctx caddy.Context) error {
 	}
 	s.a = srv
 	s.FS = afero.NewIOFS(s.a)
+	s.log.Debug("initialized vfs", zap.Any("fs", s.Overlay), zap.Duration("took", time.Since(start)))
 
 	return nil
 }
