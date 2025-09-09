@@ -6,7 +6,7 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 # vim: set ts=2 sw=2 tw=0 fo=cnqoj
 
-version: 1
+version: 2
 
 before:
   hooks:
@@ -20,32 +20,28 @@ builds:
       - linux
       - darwin
 
-dockers:
+dockers_v2:
   - id: gfxlabs-swim-github
-    goos: linux
-    goarch: amd64
-    goarm: ""
-    goamd64: "v2"
-    image_templates:
-      - "gfxlabs/swim:latest"
-      - "gfxlabs/swim:{{ .Tag }}"
-      - "gfxlabs/swim:v{{ .Major }}.{{.Minor}}"
-      - "gfxlabs/swim:v{{ .Major }}"
+    labels:
+      "org.opencontainers.image.created": "{{.Date}}"
+      "org.opencontainers.image.title": "{{.ProjectName}}"
+      "org.opencontainers.image.revision": "{{.FullCommit}}"
+      "org.opencontainers.image.version": "{{.Version}}"
+    images:
+      - "gfxlabs/swim"
+    tags:
+      - "latest"
+      - "{{ .Tag }}"
+      - "v{{ .Major }}.{{.Minor}}"
+      - "v{{ .Major }}"
+
     dockerfile: "goreleaser.Dockerfile"
-    use: docker
-    build_flag_templates:
-      - "--pull"
-      - "--label=org.opencontainers.image.created={{.Date}}"
-      - "--label=org.opencontainers.image.title={{.ProjectName}}"
-      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
-      - "--label=org.opencontainers.image.version={{.Version}}"
-      - "--platform=linux/amd64"
     extra_files:
       - dist/swim_linux_amd64_v2/swim
       - docker
 
 archives:
-  - format: tar.gz
+  - formats: [ 'tar.gz' ]
     # this name template makes the OS and Arch compatible with the results of `uname`.
     name_template: >-
       {{ .ProjectName }}_
