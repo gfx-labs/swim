@@ -34,7 +34,6 @@ dockers_v2:
       - "{{ .Tag }}"
       - "v{{ .Major }}.{{.Minor}}"
       - "v{{ .Major }}"
-
     dockerfile: "goreleaser.Dockerfile"
     extra_files:
       - dist/swim_linux_amd64_v2/swim
