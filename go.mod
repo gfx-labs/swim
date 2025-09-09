@@ -2,6 +2,8 @@ module github.com/gfx-labs/swim
 
 go 1.25
 
+tool github.com/guilhem/bump
+
 require (
 	github.com/aws/aws-sdk-go-v2 v1.38.1
 	github.com/aws/aws-sdk-go-v2/config v1.29.16
