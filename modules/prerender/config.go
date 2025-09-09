@@ -37,12 +37,23 @@ func (c FileTypes) Contains(x string) bool {
 	return false
 }
 
+// https://docs.prerender.io/docs/how-to-add-additional-bots
 var defaultCrawlerUserAgents = [...]string{
 	"googlebot",
+	"adsbot-google",
+	"googleproducer",
 	"Yahoo! Slurp",
+	"yahoo",
+	"naver",
+	"seznambot",
+	"sznpholizec",
 	"bingbot",
 	"yandex",
+	"yabrowser",
 	"baiduspider",
+	"facebookcatalog",
+	"facebookbot",
+	"meta-externalagent",
 	"facebookexternalhit",
 	"twitterbot",
 	"rogerbot",
@@ -52,6 +63,7 @@ var defaultCrawlerUserAgents = [...]string{
 	"showyoubot",
 	"outbrain",
 	"pinterest/0.",
+	"pinterest",
 	"developers.google.com/+/web/snippet",
 	"slackbot",
 	"vkShare",
@@ -67,11 +79,24 @@ var defaultCrawlerUserAgents = [...]string{
 	"Discordbot",
 	"Google Page Speed",
 	"Qwantify",
+	"quantbot",
+	"ecosia",
 	"pinterestbot",
+	"instagram",
+	"duckduckbot",
+	"duckassistbot",
 	"Bitrix link preview",
 	"XING-contenttabreceiver",
 	"Chrome-Lighthouse",
+	"deepcrawl",
+	"lumar",
+
+	"tiktok",
+	"tiktokspider",
+	"bytespider",
+	//
 	"KiwiNewsBot",
+
 	// ok now we need to get the um... ai bots
 	"gptbot",
 	"chatgpt ",
