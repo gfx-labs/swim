@@ -72,6 +72,22 @@ var defaultCrawlerUserAgents = [...]string{
 	"XING-contenttabreceiver",
 	"Chrome-Lighthouse",
 	"KiwiNewsBot",
+	// ok now we need to get the um... ai bots
+	"gptbot",
+	"chatgpt ",
+	"oai-searchbot ",
+	"chatgpt-user",
+	"claudebot",
+	"google-extended",
+	"perplexitybot",
+	"perplexity-user",
+	"youbot",
+	"amazonbot",
+	"anthropic-ai",
+	"claudebot",
+	"claude-web",
+	"ccbot",
+	"mistralai-user",
 }
 
 var defaultSkippedTypes = [...]string{
