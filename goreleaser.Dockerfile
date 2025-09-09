@@ -1,7 +1,5 @@
 from alpine:latest
 
-ARG TARGETPLATFORM
-
 RUN apk add --no-cache \
 	ca-certificates \
 	libcap \
@@ -17,7 +15,8 @@ EXPOSE 2019
 
 WORKDIR /srv
 
-copy dist/$TARGETPLATFORM/swim /usr/local/bin/caddy
+copy dist/swim_linux_amd64_v2/swim /usr/local/bin/caddy
+
 RUN cp /usr/local/bin/caddy /usr/local/bin/swim
 
 copy docker/Caddyfile /etc/caddy/Caddyfile
