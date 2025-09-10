@@ -64,9 +64,11 @@ func (o *Overlay) openS3(u *url.URL) (afero.Fs, error) {
 	}
 
 	s3Client := s3.NewFromConfig(cfg, opts...)
+	// Remove leading slash from path for S3 key
+	key := strings.TrimPrefix(u.Path, "/")
 	oo, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucketName),
-		Key:    aws.String(u.Path),
+		Key:    aws.String(key),
 	})
 	if err != nil {
 		return nil, err
