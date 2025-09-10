@@ -36,11 +36,23 @@ func (o *Overlay) openS3(u *url.URL) (afero.Fs, error) {
 		region = "us-east-1"
 	}
 
-	// Create config with static credentials
-	cfg, err := config.LoadDefaultConfig(ctx,
-		config.WithRegion(region),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKeyId, secretAccessKey, "")),
-	)
+	// Create config with appropriate credentials
+	var cfg aws.Config
+	var err error
+	
+	// If no credentials provided or they are explicitly empty, use anonymous access
+	if (accessKeyId == "" && secretAccessKey == "") {
+		cfg, err = config.LoadDefaultConfig(ctx,
+			config.WithRegion(region),
+			config.WithCredentialsProvider(aws.AnonymousCredentials{}),
+		)
+	} else {
+		// Use provided credentials
+		cfg, err = config.LoadDefaultConfig(ctx,
+			config.WithRegion(region),
+			config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKeyId, secretAccessKey, "")),
+		)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -64,10 +76,28 @@ func (o *Overlay) openS3(u *url.URL) (afero.Fs, error) {
 	}
 
 	s3Client := s3.NewFromConfig(cfg, opts...)
-	// Remove leading slash from path for S3 key
-	key := strings.TrimPrefix(u.Path, "/")
+	
+	// Parse bucket and key
+	var bucket, key string
+	path := strings.TrimPrefix(u.Path, "/")
+	
+	// If bucket name is explicitly provided, use it
+	if bucketName != "" {
+		bucket = bucketName
+		key = path
+	} else {
+		// Parse bucket from the first segment of the path
+		parts := strings.SplitN(path, "/", 2)
+		if len(parts) > 0 {
+			bucket = parts[0]
+			if len(parts) > 1 {
+				key = parts[1]
+			}
+		}
+	}
+	
 	oo, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(bucketName),
+		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
