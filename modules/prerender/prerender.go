@@ -17,6 +17,7 @@ type Prerender struct {
 	PrerenderURL *url.URL `json:"prerender_url,omitempty"`
 	Token        string   `json:"token,omitempty"`
 	PathPrefix   string   `json:"path_prefix,omitempty"`
+	AuthHeader   string   `json:"auth_header,omitempty"`
 
 	CrawlerUserAgents CrawlerUserAgents `json:"user_agents,omitempty"`
 	SkippedFileTypes  FileTypes         `json:"skip_file_types,omitempty"`
@@ -30,28 +31,59 @@ func ParseCaddyFile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error)
 
 func (co *Prerender) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
+		// positional args: <token> [<path_prefix>] [<prerender_url>]
 		if d.NextArg() {
 			co.Token = d.Val()
 		}
 		if d.NextArg() {
-			// optional arg
 			co.PathPrefix = d.Val()
 		}
-		var urlString string
 		if d.NextArg() {
-			// optional arg
-			urlString = d.Val()
-		} else {
-			urlString = "https://service.prerender.io"
+			u, err := url.Parse(d.Val())
+			if err != nil {
+				return err
+			}
+			co.PrerenderURL = u
 		}
-		u, err := url.Parse(urlString)
-		if err != nil {
-			return err
-		}
-		co.PrerenderURL = u
 		if d.NextArg() {
 			return d.ArgErr()
 		}
+		// block options override positional args
+		for nesting := d.Nesting(); d.NextBlock(nesting); {
+			switch strings.ToLower(d.Val()) {
+			case "token":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				co.Token = d.Val()
+			case "path_prefix":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				co.PathPrefix = d.Val()
+			case "url":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				u, err := url.Parse(d.Val())
+				if err != nil {
+					return err
+				}
+				co.PrerenderURL = u
+			case "auth_header":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				co.AuthHeader = d.Val()
+			default:
+				return d.SyntaxErr("expected token, path_prefix, url, or auth_header")
+			}
+		}
+	}
+	// default prerender URL if not set
+	if co.PrerenderURL == nil {
+		u, _ := url.Parse("https://service.prerender.io")
+		co.PrerenderURL = u
 	}
 	return nil
 }
@@ -137,7 +169,11 @@ func (p *Prerender) PreRenderHandler(rw http.ResponseWriter, or *http.Request) {
 		return
 	}
 	if p.Token != "" {
-		req.Header.Set("X-Prerender-Token", p.Token)
+		headerName := p.AuthHeader
+		if headerName == "" {
+			headerName = "X-Prerender-Token"
+		}
+		req.Header.Set(headerName, p.Token)
 	}
 	req.Header.Set("User-Agent", or.Header.Get("User-Agent"))
 	req.Header.Set("Content-Type", or.Header.Get("Content-Type"))
