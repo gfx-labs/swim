@@ -1,7 +1,7 @@
 # AGENTS.md — swim
 
 Custom Caddy server with modules for hosting static websites.
-Module: `github.com/gfx-labs/swim` — Go 1.25.0, Caddy v2.
+Module: `github.com/gfx-labs/swim` — Go, Caddy v2.
 
 ## Build / Test / Run Commands
 
