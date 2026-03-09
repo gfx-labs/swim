@@ -9,16 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newMergefs(layers []afero.Fs) *mergefs.Mergefs {
-	fsLayers := make([]fs.FS, len(layers))
-	for i, l := range layers {
-		fsLayers[i] = afero.NewIOFS(l)
-	}
-	m := new(mergefs.Mergefs)
-	m.BuildLayers(fsLayers)
-	return m
-}
-
 func TestMergeOverlayPriority(t *testing.T) {
 	// layer 0 (high priority) has index.html with "top"
 	// layer 1 (low priority) has index.html with "bottom"
@@ -28,7 +18,8 @@ func TestMergeOverlayPriority(t *testing.T) {
 	bottom := afero.NewMemMapFs()
 	afero.WriteFile(bottom, "index.html", []byte("bottom"), 0o644)
 
-	m := newMergefs([]afero.Fs{top, bottom})
+	m := new(mergefs.Mergefs)
+	m.BuildAferoLayers([]afero.Fs{top, bottom})
 
 	data, err := fs.ReadFile(m, "index.html")
 	require.NoError(t, err)
@@ -45,7 +36,8 @@ func TestMergeFallthrough(t *testing.T) {
 	layer1 := afero.NewMemMapFs()
 	afero.WriteFile(layer1, "b.txt", []byte("bbb"), 0o644)
 
-	m := newMergefs([]afero.Fs{layer0, layer1})
+	m := new(mergefs.Mergefs)
+	m.BuildAferoLayers([]afero.Fs{layer0, layer1})
 
 	data, err := fs.ReadFile(m, "a.txt")
 	require.NoError(t, err)
@@ -68,7 +60,8 @@ func TestMergeDirectoryListing(t *testing.T) {
 	layer1.MkdirAll("static", 0o755)
 	afero.WriteFile(layer1, "static/style.css", []byte("css"), 0o644)
 
-	m := newMergefs([]afero.Fs{layer0, layer1})
+	m := new(mergefs.Mergefs)
+	m.BuildAferoLayers([]afero.Fs{layer0, layer1})
 
 	entries, err := fs.ReadDir(m, "static")
 	require.NoError(t, err)
@@ -85,7 +78,8 @@ func TestMergeNotFound(t *testing.T) {
 	layer0 := afero.NewMemMapFs()
 	afero.WriteFile(layer0, "exists.txt", []byte("yes"), 0o644)
 
-	m := newMergefs([]afero.Fs{layer0})
+	m := new(mergefs.Mergefs)
+	m.BuildAferoLayers([]afero.Fs{layer0})
 
 	_, err := m.Open("nope.txt")
 	require.Error(t, err)
@@ -113,7 +107,8 @@ func TestMergeThreeLayers(t *testing.T) {
 	afero.WriteFile(base, "shared.txt", []byte("base"), 0o644)
 	afero.WriteFile(base, "base.txt", []byte("base"), 0o644)
 
-	m := newMergefs([]afero.Fs{top, mid, base})
+	m := new(mergefs.Mergefs)
+	m.BuildAferoLayers([]afero.Fs{top, mid, base})
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -128,7 +123,8 @@ func TestMergeOpenStripsSlashes(t *testing.T) {
 	layer := afero.NewMemMapFs()
 	afero.WriteFile(layer, "index.html", []byte("hello"), 0o644)
 
-	m := newMergefs([]afero.Fs{layer})
+	m := new(mergefs.Mergefs)
+	m.BuildAferoLayers([]afero.Fs{layer})
 
 	data, err := fs.ReadFile(m, "/index.html")
 	require.NoError(t, err)

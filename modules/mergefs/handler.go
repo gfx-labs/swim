@@ -61,16 +61,34 @@ func (s *Mergefs) Provision(ctx caddy.Context) error {
 	return nil
 }
 
-// BuildLayers constructs the merged union filesystem from the given layers.
+// BuildLayers constructs the merged union filesystem from the given fs.FS layers.
 // layers[0] has highest priority; layers[len-1] is the base.
 func (s *Mergefs) BuildLayers(layers []fs.FS) {
 	s.layers = layers
+	aferoLayers := make([]afero.Fs, len(layers))
+	for i, l := range layers {
+		aferoLayers[i] = afero.FromIOFS{FS: l}
+	}
+	s.buildAfero(aferoLayers)
+}
+
+// BuildAferoLayers constructs the merged union filesystem from the given afero layers.
+// layers[0] has highest priority; layers[len-1] is the base.
+func (s *Mergefs) BuildAferoLayers(layers []afero.Fs) {
+	fsLayers := make([]fs.FS, len(layers))
+	for i, l := range layers {
+		fsLayers[i] = afero.NewIOFS(l)
+	}
+	s.layers = fsLayers
+	s.buildAfero(layers)
+}
+
+func (s *Mergefs) buildAfero(layers []afero.Fs) {
 	// build the union: last layer is the base, each earlier layer overlays it
 	// CopyOnWriteFs gives us merged directory listings via UnionFile
-	var merged afero.Fs = afero.FromIOFS{FS: layers[len(layers)-1]}
+	merged := layers[len(layers)-1]
 	for i := len(layers) - 2; i >= 0; i-- {
-		layer := afero.FromIOFS{FS: layers[i]}
-		merged = afero.NewCopyOnWriteFs(merged, layer)
+		merged = afero.NewCopyOnWriteFs(merged, layers[i])
 	}
 	merged = afero.NewReadOnlyFs(merged)
 	s.a = merged
