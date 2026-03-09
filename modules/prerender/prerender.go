@@ -185,6 +185,7 @@ func (p *Prerender) PreRenderHandler(rw http.ResponseWriter, or *http.Request) {
 	}
 
 	rw.Header().Set("Content-Type", res.Header.Get("Content-Type"))
+	rw.Header().Set("X-Prerendered", "1")
 
 	defer res.Body.Close()
 
