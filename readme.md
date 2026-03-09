@@ -42,6 +42,34 @@ github.com/gfx-labs/swim/plugin/localfs
 
 this is a simple local fs
 
+## mergefs
+
+```
+github.com/gfx-labs/swim/plugin/mergefs
+```
+
+mergefs is a union filesystem that merges multiple caddy filesystem modules into a single read-only fs. layers are ordered by priority, with the first layer winning on conflicts. directory listings are combined across all layers.
+
+```
+{
+	admin off
+	filesystem merged merge {
+		layer local {
+			root /srv/overrides
+		}
+		layer vfs {
+			overlay s3://bucket/site.tar.gz
+		}
+	}
+}
+
+:8000 {
+	fs merged
+	file_server browse {
+	}
+}
+```
+
 ## prerender
 
 
