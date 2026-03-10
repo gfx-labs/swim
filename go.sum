@@ -183,6 +183,8 @@ github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.19 h1:INUvJxmhdEbVulJYHI061k
 github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.19/go.mod h1:FpZN2QISLdEBWkayloda+sZjVJL+e9Gl0k1SyTgcswU=
 github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.20.16 h1:NkjoiJoSpZqzsRcpM6rlk5AOCLro8JkK8UqekAm/hxM=
 github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.20.16/go.mod h1:l2736DvrgbOinD65Ksh8fc/WQHBBlvsd+0/ZaxtsmGY=
+github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.20.19 h1:Gxj3kAlmM+a/VVO4YNsmgHGVUZhSxs0tuVwLIxZBCtM=
+github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.20.19/go.mod h1:XGq5kImVqQT4HUNbbG+0Y8O74URsPNH7CGPg1s1HW5E=
 github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.19 h1:/sECfyq2JTifMI2JPyZ4bdRN77zJmr6SrS1eL3augIA=
 github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.19/go.mod h1:dMf8A5oAqr9/oxOfLkC/c2LU/uMcALP0Rgn2BD5LWn0=
 github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.19 h1:AWeJMk33GTBf6J20XJe6qZoRSJo0WfUhsMdUKhoODXE=
@@ -419,6 +421,8 @@ github.com/fatih/color v1.18.0 h1:S8gINlzdQ840/4pfAwic/ZE0djQEH3wM94VfqLTZcOM=
 github.com/fatih/color v1.18.0/go.mod h1:4FelSpRwEGDpQ12mAdzqdOukCy4u8WUtOY6lkT/6HfU=
 github.com/fatih/set v0.2.1 h1:nn2CaJyknWE/6txyUDGwysr3G5QC6xWB/PtVjPBbeaA=
 github.com/fatih/set v0.2.1/go.mod h1:+RKtMCH+favT2+3YecHGxcc0b4KyVWA1QWWJUs4E0CI=
+github.com/fclairamb/afero-s3 v0.4.0 h1:N++eKFyOTkdYQMDSAU2AGMVWBOo49FqbpeQ+e3v1jQA=
+github.com/fclairamb/afero-s3 v0.4.0/go.mod h1:1SnwtWGA61s7B32BknqXRIZ34yQm+97fY9HlHYZ8RwA=
 github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2Wg=
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/fortytw2/leaktest v1.3.0 h1:u8491cBMTQ8ft8aeV+adlcytMZylmA5nnwwkRZjI8vw=
