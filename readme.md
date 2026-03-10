@@ -58,7 +58,7 @@ mergefs is a union filesystem that merges multiple caddy filesystem modules into
 			root /srv/overrides
 		}
 		layer vfs {
-			overlay s3://bucket/site.tar.gz
+			root s3://bucket/site.tar.gz
 		}
 	}
 }
