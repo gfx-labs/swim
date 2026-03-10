@@ -110,7 +110,6 @@ func (p *Prerender) ShouldPrerender(or *http.Request) bool {
 	userAgent := strings.ToLower(or.Header.Get("User-Agent"))
 	bufferAgent := or.Header.Get("X-Bufferbot")
 	isRequestingPrerenderedPage := false
-	reqURL := strings.ToLower(or.URL.String())
 
 	if userAgent == "" {
 		return false
@@ -120,7 +119,7 @@ func (p *Prerender) ShouldPrerender(or *http.Request) bool {
 		return false
 	}
 
-	if p.SkippedFileTypes.Contains(reqURL) {
+	if p.SkippedFileTypes.Contains(strings.ToLower(or.URL.Path)) {
 		return false
 	}
 
@@ -133,11 +132,10 @@ func (p *Prerender) ShouldPrerender(or *http.Request) bool {
 	return p.CrawlerUserAgents.Contains(userAgent)
 }
 
-func (p *Prerender) buildURL(or *http.Request) string {
-	url := p.PrerenderURL
-
-	if !strings.HasSuffix(url.String(), "/") {
-		url.Path = url.Path + "/"
+func (p *Prerender) BuildURL(or *http.Request) string {
+	base := p.PrerenderURL.String()
+	if !strings.HasSuffix(base, "/") {
+		base = base + "/"
 	}
 
 	protocol := or.URL.Scheme
@@ -156,7 +154,7 @@ func (p *Prerender) buildURL(or *http.Request) string {
 	if fp := or.Header.Get("X-Forwarded-Proto"); fp != "" {
 		protocol = strings.Split(fp, ",")[0]
 	}
-	apiURL := url.String() + protocol + "://" + or.Host + p.PathPrefix + or.URL.Path + "?" +
+	apiURL := base + protocol + "://" + or.Host + p.PathPrefix + or.URL.Path + "?" +
 		or.URL.RawQuery
 	return apiURL
 }
@@ -164,7 +162,7 @@ func (p *Prerender) buildURL(or *http.Request) string {
 func (p *Prerender) PreRenderHandler(rw http.ResponseWriter, or *http.Request) {
 	client := &http.Client{}
 
-	req, err := http.NewRequest("GET", p.buildURL(or), nil)
+	req, err := http.NewRequest("GET", p.BuildURL(or), nil)
 	if err != nil {
 		return
 	}
@@ -228,10 +226,9 @@ func (p *Prerender) PreRenderHandler(rw http.ResponseWriter, or *http.Request) {
 
 func (p *Prerender) PrerenderMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if p.Token != "" {
-			if p.ShouldPrerender(r) {
-				p.PreRenderHandler(w, r)
-			}
+		if p.Token != "" && p.ShouldPrerender(r) {
+			p.PreRenderHandler(w, r)
+			return
 		}
 		next.ServeHTTP(w, r)
 	})
