@@ -2,10 +2,10 @@ package vfs
 
 import (
 	"fmt"
+	"github.com/spf13/afero"
 	"net/http"
 	"net/url"
 	"os"
-	"github.com/spf13/afero"
 )
 
 func (o *Overlay) resolvePlaceholders() {
@@ -50,6 +50,8 @@ func (o *Overlay) openRawFilesystem() (afero.Fs, error) {
 		return o.openHttp(u)
 	case "s3":
 		return o.openS3(u)
+	case "gs":
+		return o.openGcs(u)
 	default:
 		return nil, fmt.Errorf("unrecognized scheme: %s", u.Scheme)
 	}
