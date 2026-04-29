@@ -208,7 +208,7 @@ func (c *GithubClient) DownloadArtifact(ctx context.Context, artifactID int64, m
 		fmt.Sprintf("%d.zip", artifactID),
 	)
 
-	fs, size, digest, cleanup, err := archive.ZipFsFromDisk(resp.Body, maxSize, zipPath)
+	fs, size, digest, cleanup, err := archive.DownloadZipFs(resp.Body, maxSize, zipPath)
 	if err != nil {
 		return nil, 0, nil, fmt.Errorf("extract artifact %d: %w", artifactID, err)
 	}

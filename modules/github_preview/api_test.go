@@ -11,60 +11,54 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAuthenticateRefresh(t *testing.T) {
+func TestAuthenticateAPI(t *testing.T) {
 	tests := []struct {
-		name       string
-		token      string
-		authHeader string
-		want       bool
+		name      string
+		apiKey    string
+		headerVal string
+		want      bool
 	}{
 		{
-			name:       "valid token",
-			token:      "secret123",
-			authHeader: "Bearer secret123",
-			want:       true,
+			name:      "valid key",
+			apiKey:    "secret123",
+			headerVal: "secret123",
+			want:      true,
 		},
 		{
-			name:       "invalid token",
-			token:      "secret123",
-			authHeader: "Bearer wrongtoken",
-			want:       false,
+			name:      "invalid key",
+			apiKey:    "secret123",
+			headerVal: "wrongkey",
+			want:      false,
 		},
 		{
-			name:       "missing authorization header",
-			token:      "secret123",
-			authHeader: "",
-			want:       false,
+			name:      "missing header",
+			apiKey:    "secret123",
+			headerVal: "",
+			want:      false,
 		},
 		{
-			name:       "empty configured token",
-			token:      "",
-			authHeader: "Bearer anything",
-			want:       false,
+			name:      "empty configured key",
+			apiKey:    "",
+			headerVal: "anything",
+			want:      false,
 		},
 		{
-			name:       "empty configured token and empty header",
-			token:      "",
-			authHeader: "",
-			want:       false,
-		},
-		{
-			name:       "wrong scheme",
-			token:      "secret123",
-			authHeader: "Basic secret123",
-			want:       false,
+			name:      "both empty",
+			apiKey:    "",
+			headerVal: "",
+			want:      false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := &GithubPreview{
-				RefreshToken: tt.token,
+				ApiKey: tt.apiKey,
 			}
 			r := httptest.NewRequest(http.MethodGet, "/", nil)
-			if tt.authHeader != "" {
-				r.Header.Set("Authorization", tt.authHeader)
+			if tt.headerVal != "" {
+				r.Header.Set("X-Api-Key", tt.headerVal)
 			}
-			got := g.authenticateRefresh(r)
+			got := g.authenticateAPI(r)
 			require.Equal(t, tt.want, got)
 		})
 	}
@@ -243,14 +237,14 @@ func TestHandleAPIRouting(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := &GithubPreview{
-				RefreshToken:  "test-token",
+				ApiKey:        "test-key",
 				ApiPath:       "/.well-known/github-preview",
 				metadataCache: newMetadataCache(5 * time.Minute),
 				artifactCache: newArtifactCache(10),
 			}
 
 			r := httptest.NewRequest(tt.method, tt.path, nil)
-			r.Header.Set("Authorization", "Bearer test-token")
+			r.Header.Set("X-Api-Key", "test-key")
 			w := httptest.NewRecorder()
 
 			err := g.handleAPI(w, r)
@@ -293,14 +287,14 @@ func TestHandleAPIUnauthorized(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := &GithubPreview{
-				RefreshToken:  "real-token",
+				ApiKey:        "real-key",
 				ApiPath:       "/.well-known/github-preview",
 				metadataCache: newMetadataCache(5 * time.Minute),
 				artifactCache: newArtifactCache(10),
 			}
 
 			r := httptest.NewRequest(tt.method, tt.path, nil)
-			// no Authorization header
+			// no X-Api-Key header
 			w := httptest.NewRecorder()
 
 			err := g.handleAPI(w, r)

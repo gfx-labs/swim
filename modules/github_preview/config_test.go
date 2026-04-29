@@ -177,7 +177,7 @@ func TestUnmarshalCaddyfile(t *testing.T) {
 				max_artifacts 100
 				max_artifact_size 500MB
 				api_path "/_api"
-				refresh_token "secret123"
+				api_key "secret123"
 				api_url "https://github.example.com/api/v3"
 				stale_while_revalidate true
 				error_template "<h1>Error</h1>"
@@ -195,7 +195,7 @@ func TestUnmarshalCaddyfile(t *testing.T) {
 				require.Equal(t, 100, g.MaxArtifacts)
 				require.Equal(t, int64(500*1024*1024), g.MaxArtifactSize)
 				require.Equal(t, "/_api", g.ApiPath)
-				require.Equal(t, "secret123", g.RefreshToken)
+				require.Equal(t, "secret123", g.ApiKey)
 				require.Equal(t, "https://github.example.com/api/v3", g.ApiURL)
 				require.True(t, g.StaleWhileRevalidate)
 				require.Equal(t, "<h1>Error</h1>", g.ErrorTemplate)

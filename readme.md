@@ -113,7 +113,7 @@ the github token requires the following permissions:
         workflow "ci.yml"
         artifact_name "build-artifacts"
         workdir "dist"
-        refresh_token {env.PREVIEW_REFRESH_TOKEN}
+        api_key {env.PREVIEW_API_KEY}
     }
     try_files {path} /index.html
     @no_cache path */sw.js */index.html
@@ -140,13 +140,13 @@ the github token requires the following permissions:
 | `max_artifact_size` | `100MB` | max artifact download size |
 | `stale_while_revalidate` | `false` | serve stale cache while refreshing in background |
 | `api_path` | `/.well-known/github-preview` | path prefix for the management API |
-| `refresh_token` | (none) | bearer token for the management API |
+| `api_key` | (none) | API key for the management API (`X-Api-Key` header) |
 | `error_template` | (built-in) | inline HTML template for error pages |
 | `error_template_file` | (none) | path to a custom error template file |
 
 ### management API
 
-all endpoints require `Authorization: Bearer <refresh_token>`.
+all endpoints require `X-Api-Key: <api_key>` header.
 
 **POST `/.well-known/github-preview/refresh`** -- resolve and cache an artifact for a PR. optionally provide an `artifact_id` hint from CI.
 
@@ -176,7 +176,7 @@ in the GitHub Actions workflow, after uploading the build artifact:
     ARTIFACT_ID=$(gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts \
       --jq '.artifacts[] | select(.name=="dist") | .id')
     curl -X POST https://preview.oku.trade/.well-known/github-preview/refresh \
-      -H "Authorization: Bearer ${{ secrets.PREVIEW_REFRESH_TOKEN }}" \
+      -H "X-Api-Key: ${{ secrets.PREVIEW_API_KEY }}" \
       -H "Content-Type: application/json" \
       -d "{\"pr\": ${{ github.event.pull_request.number }}, \"artifact_id\": ${ARTIFACT_ID}}"
 ```
@@ -187,7 +187,7 @@ on PR close:
 - name: Evict preview cache
   run: |
     curl -X DELETE https://preview.oku.trade/.well-known/github-preview/refresh \
-      -H "Authorization: Bearer ${{ secrets.PREVIEW_REFRESH_TOKEN }}" \
+      -H "X-Api-Key: ${{ secrets.PREVIEW_API_KEY }}" \
       -H "Content-Type: application/json" \
       -d "{\"pr\": ${{ github.event.pull_request.number }}}"
 ```

@@ -105,11 +105,11 @@ func (g *GithubPreview) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					return d.ArgErr()
 				}
 				g.ApiPath = d.Val()
-			case "refresh_token":
+			case "api_key":
 				if !d.NextArg() {
 					return d.ArgErr()
 				}
-				g.RefreshToken = d.Val()
+				g.ApiKey = d.Val()
 			case "api_url":
 				if !d.NextArg() {
 					return d.ArgErr()

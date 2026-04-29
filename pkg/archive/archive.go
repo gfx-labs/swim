@@ -59,58 +59,94 @@ func FilesystemFromReader(ft string, r io.Reader) (rootFs afero.Fs, err error) {
 	return rootFs, nil
 }
 
-// ZipFsFromDisk writes the contents of r to a file at the given path and
-// returns a zip-backed afero.Fs that serves files directly from the on-disk
-// zip (random access via the central directory, no full extraction into memory).
-// parent directories are created automatically.
-//
-// the returned cleanup function removes the file and must be called when the
-// filesystem is no longer needed. the returned digest is the sha256 hex hash
-// of the written content.
-//
-// maxSize limits how many bytes are written to disk. if the stream exceeds
-// this limit the file is removed and an error is returned.
-func ZipFsFromDisk(r io.Reader, maxSize int64, path string) (rootFs afero.Fs, sizeBytes int64, digest string, cleanup func(), err error) {
-	os.MkdirAll(filepath.Dir(path), 0o700)
-	f, err := os.Create(path)
+// OpenZipFs opens an existing zip file on disk and returns a zip-backed
+// afero.Fs that serves files via random access (no full extraction into memory).
+// the returned cleanup function closes the file handle.
+func OpenZipFs(path string) (rootFs afero.Fs, sizeBytes int64, cleanup func(), err error) {
+	f, err := os.Open(path)
 	if err != nil {
-		return nil, 0, "", nil, fmt.Errorf("create temp file: %w", err)
+		return nil, 0, nil, err
 	}
-	tempPath := f.Name()
-
-	// ensure cleanup on any error path
-	removeTemp := func() { os.Remove(tempPath) }
-
-	// copy with size limit, computing sha256 as we go
-	limited := io.LimitReader(r, maxSize+1)
-	h := sha256.New()
-	tee := io.TeeReader(limited, h)
-	n, err := io.Copy(f, tee)
+	info, err := f.Stat()
 	if err != nil {
 		f.Close()
-		removeTemp()
-		return nil, 0, "", nil, fmt.Errorf("write temp file: %w", err)
+		return nil, 0, nil, err
 	}
-	if n > maxSize {
-		f.Close()
-		removeTemp()
-		return nil, 0, "", nil, fmt.Errorf("archive exceeds max size %d", maxSize)
-	}
+	n := info.Size()
 
-	digest = "sha256:" + hex.EncodeToString(h.Sum(nil))
-
-	// open the zip from the on-disk file (random access via io.ReaderAt)
 	ziprd, err := zip.NewReader(f, n)
 	if err != nil {
 		f.Close()
-		removeTemp()
-		return nil, 0, "", nil, fmt.Errorf("open zip: %w", err)
+		return nil, 0, nil, fmt.Errorf("open zip: %w", err)
+	}
+
+	cleanup = func() { f.Close() }
+	return zipfs.New(ziprd), n, cleanup, nil
+}
+
+// DownloadZipFs downloads the contents of r to a file at path, computing
+// the sha256 digest as it goes, then opens the result as a zip-backed afero.Fs.
+// parent directories are created automatically. if the stream exceeds maxSize
+// the file is removed and an error is returned.
+func DownloadZipFs(r io.Reader, maxSize int64, path string) (rootFs afero.Fs, sizeBytes int64, digest string, cleanup func(), err error) {
+	if err := downloadToFile(r, maxSize, path); err != nil {
+		return nil, 0, "", nil, err
+	}
+
+	// compute digest from the written file
+	digest, err = hashFile(path)
+	if err != nil {
+		os.Remove(path)
+		return nil, 0, "", nil, err
+	}
+
+	rootFs, sizeBytes, fsCleanup, err := OpenZipFs(path)
+	if err != nil {
+		os.Remove(path)
+		return nil, 0, "", nil, err
 	}
 
 	cleanup = func() {
-		f.Close()
-		os.Remove(tempPath)
+		fsCleanup()
+		os.Remove(path)
+	}
+	return rootFs, sizeBytes, digest, cleanup, nil
+}
+
+// downloadToFile writes r to path, enforcing maxSize. creates parent dirs.
+func downloadToFile(r io.Reader, maxSize int64, path string) error {
+	os.MkdirAll(filepath.Dir(path), 0o700)
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create file: %w", err)
 	}
 
-	return zipfs.New(ziprd), n, digest, cleanup, nil
+	limited := io.LimitReader(r, maxSize+1)
+	n, err := io.Copy(f, limited)
+	if closeErr := f.Close(); closeErr != nil && err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		os.Remove(path)
+		return fmt.Errorf("write file: %w", err)
+	}
+	if n > maxSize {
+		os.Remove(path)
+		return fmt.Errorf("archive exceeds max size %d", maxSize)
+	}
+	return nil
+}
+
+// hashFile computes the sha256 digest of a file on disk
+func hashFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }

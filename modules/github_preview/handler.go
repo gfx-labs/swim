@@ -80,9 +80,9 @@ type GithubPreview struct {
 	MaxArtifactAge       Duration `json:"max_artifact_age,omitempty"` // evict artifacts not accessed in this long (default: disabled)
 	ReadCacheSize        int64    `json:"read_cache_size,omitempty"`  // per-artifact LRU read cache in bytes (default 10MB)
 
-	// refresh API
-	ApiPath      string `json:"api_path,omitempty"`
-	RefreshToken string `json:"refresh_token,omitempty"`
+	// management API
+	ApiPath string `json:"api_path,omitempty"`
+	ApiKey  string `json:"api_key,omitempty"`
 
 	// error templates
 	ErrorTemplate     string `json:"error_template,omitempty"`
@@ -125,7 +125,7 @@ func (g *GithubPreview) Provision(ctx caddy.Context) error {
 	rp := caddy.NewReplacer()
 	g.Repo = rp.ReplaceAll(g.Repo, "")
 	g.Token = rp.ReplaceAll(g.Token, "")
-	g.RefreshToken = rp.ReplaceAll(g.RefreshToken, "")
+	g.ApiKey = rp.ReplaceAll(g.ApiKey, "")
 	g.ApiURL = rp.ReplaceAll(g.ApiURL, "")
 	g.ErrorTemplateFile = rp.ReplaceAll(g.ErrorTemplateFile, "")
 
@@ -144,8 +144,8 @@ func (g *GithubPreview) Provision(ctx caddy.Context) error {
 		g.log.Warn("github_preview: no token configured, API calls will be unauthenticated")
 	}
 
-	if g.RefreshToken == "" {
-		g.log.Warn("github_preview: no refresh_token configured, refresh API will return 403")
+	if g.ApiKey == "" {
+		g.log.Warn("github_preview: no api_key configured, management API will return 403")
 	}
 
 	// set defaults
@@ -274,14 +274,8 @@ func (g *GithubPreview) ServeHTTP(w http.ResponseWriter, r *http.Request, next c
 		return nil
 	}
 
-	// check for debug endpoint (requires refresh token)
+	// check for debug endpoint (reads from cache only, no auth required)
 	if r.URL.Path == "/.well-known/deployment-debug" {
-		if !g.authenticateRefresh(r) {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{
-				"error": "unauthorized",
-			})
-			return nil
-		}
 		return g.handleDebug(w, r, key)
 	}
 

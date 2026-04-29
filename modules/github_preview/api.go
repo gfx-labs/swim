@@ -11,7 +11,7 @@ import (
 // handleAPI dispatches refresh API requests
 func (g *GithubPreview) handleAPI(w http.ResponseWriter, r *http.Request) error {
 	// authenticate
-	if !g.authenticateRefresh(r) {
+	if !g.authenticateAPI(r) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{
 			"error": "unauthorized",
 		})
@@ -216,12 +216,11 @@ func (g *GithubPreview) handleStatus(w http.ResponseWriter, r *http.Request) err
 	return nil
 }
 
-func (g *GithubPreview) authenticateRefresh(r *http.Request) bool {
-	if g.RefreshToken == "" {
+func (g *GithubPreview) authenticateAPI(r *http.Request) bool {
+	if g.ApiKey == "" {
 		return false
 	}
-	auth := r.Header.Get("Authorization")
-	return auth == "Bearer "+g.RefreshToken
+	return r.Header.Get("X-Api-Key") == g.ApiKey
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
