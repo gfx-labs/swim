@@ -1,6 +1,7 @@
 package github_preview
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -156,24 +157,17 @@ func (g *GithubPreview) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	return nil
 }
 
-// strconvAtoi parses a non-negative integer from a string without importing strconv
+// strconvAtoi parses a non-negative integer from a string
 func strconvAtoi(s string) (int, error) {
-	if len(s) == 0 {
-		return 0, &parseError{s}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, err
 	}
-	var n int
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0, &parseError{s}
-		}
-		n = n*10 + int(c-'0')
+	if n < 0 {
+		return 0, strconv.ErrRange
 	}
 	return n, nil
 }
-
-type parseError struct{ val string }
-
-func (e *parseError) Error() string { return "invalid integer: " + e.val }
 
 // parseByteSize parses a human-readable byte size like "100MB", "1GB", "512KB"
 func parseByteSize(s string) (int64, error) {

@@ -104,6 +104,7 @@ type GithubPreview struct {
 	// stale-while-revalidate background refresh tracking
 	refreshMu     sync.Mutex
 	refreshActive map[string]bool
+	refreshWg     sync.WaitGroup
 
 	// pruner shutdown
 	pruneStop chan struct{}
@@ -244,7 +245,12 @@ func (g *GithubPreview) Provision(ctx caddy.Context) error {
 
 func (g *GithubPreview) Cleanup() error {
 	// stop the background pruner
-	close(g.pruneStop)
+	if g.pruneStop != nil {
+		close(g.pruneStop)
+	}
+
+	// wait for in-flight background refreshes to finish
+	g.refreshWg.Wait()
 
 	// unregister all our filesystems from the global map
 	entries := g.metadataCache.snapshot()
@@ -360,9 +366,16 @@ func (g *GithubPreview) resolveAndRegister(ctx context.Context, key string) (str
 	}
 
 	// cache miss or stale without SWR -- full resolve through singleflight
-	_, err, _ := g.singleflight.Do("resolve:"+key, func() (any, error) {
-		_, err := g.fullResolve(ctx, key)
-		return nil, err
+	sfKey := "resolve:" + key
+	_, err, _ := g.singleflight.Do(sfKey, func() (any, error) {
+		fs, err := g.fullResolve(ctx, key)
+		if err != nil {
+			// forget on error so the next request retries immediately
+			// instead of all concurrent waiters sharing a transient failure
+			g.singleflight.Forget(sfKey)
+			return nil, err
+		}
+		return fs, nil
 	})
 	if err != nil {
 		return "", err
@@ -465,9 +478,11 @@ func (g *GithubPreview) triggerBackgroundRefresh(key string) {
 		return
 	}
 	g.refreshActive[key] = true
+	g.refreshWg.Add(1)
 	g.refreshMu.Unlock()
 
 	go func() {
+		defer g.refreshWg.Done()
 		defer func() {
 			g.refreshMu.Lock()
 			delete(g.refreshActive, key)

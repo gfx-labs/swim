@@ -1,7 +1,7 @@
 package github_preview
 
 import (
-	"text/template"
+	"html/template"
 	"io"
 	"os"
 )

@@ -1,6 +1,7 @@
 package github_preview
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -63,6 +64,7 @@ type refreshResponse struct {
 }
 
 func (g *GithubPreview) handleRefresh(w http.ResponseWriter, r *http.Request) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
 	var req refreshRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
@@ -152,6 +154,7 @@ type evictResponse struct {
 }
 
 func (g *GithubPreview) handleEvict(w http.ResponseWriter, r *http.Request) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
 	var req evictRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
@@ -220,7 +223,8 @@ func (g *GithubPreview) authenticateAPI(r *http.Request) bool {
 	if g.ApiKey == "" {
 		return false
 	}
-	return r.Header.Get("X-Api-Key") == g.ApiKey
+	provided := r.Header.Get("X-Api-Key")
+	return subtle.ConstantTimeCompare([]byte(provided), []byte(g.ApiKey)) == 1
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

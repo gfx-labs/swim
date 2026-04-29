@@ -109,11 +109,13 @@ func (c *ArtifactCache) get(artifactID int64) (afero.Fs, bool) {
 }
 
 func (c *ArtifactCache) set(artifactID int64, fs afero.Fs, sizeBytes int64, cleanup func()) {
+	var cleanups []func()
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	// evict LRU if at capacity
 	for len(c.entries) >= c.maxSize {
-		c.evictOldestLocked()
+		if fn := c.evictOldestLocked(); fn != nil {
+			cleanups = append(cleanups, fn)
+		}
 	}
 	c.entries[artifactID] = &artifactEntry{
 		fs:         fs,
@@ -121,9 +123,16 @@ func (c *ArtifactCache) set(artifactID int64, fs afero.Fs, sizeBytes int64, clea
 		lastAccess: time.Now(),
 		cleanup:    cleanup,
 	}
+	c.mu.Unlock()
+	// run cleanups outside lock
+	for _, fn := range cleanups {
+		fn()
+	}
 }
 
-func (c *ArtifactCache) evictOldestLocked() {
+// evictOldestLocked removes the LRU entry and returns its cleanup func (may be nil).
+// must be called with c.mu held.
+func (c *ArtifactCache) evictOldestLocked() func() {
 	var oldestID int64
 	var oldestTime time.Time
 	first := true
@@ -136,22 +145,22 @@ func (c *ArtifactCache) evictOldestLocked() {
 	}
 	if !first {
 		e := c.entries[oldestID]
-		if e.cleanup != nil {
-			e.cleanup()
-		}
 		delete(c.entries, oldestID)
+		return e.cleanup
 	}
+	return nil
 }
 
 func (c *ArtifactCache) evict(artifactID int64) bool {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	e, ok := c.entries[artifactID]
 	if ok {
-		if e.cleanup != nil {
-			e.cleanup()
-		}
 		delete(c.entries, artifactID)
+	}
+	c.mu.Unlock()
+	// run cleanup outside lock
+	if ok && e.cleanup != nil {
+		e.cleanup()
 	}
 	return ok
 }
@@ -159,12 +168,16 @@ func (c *ArtifactCache) evict(artifactID int64) bool {
 // cleanupAll removes all temp files for all cached artifacts
 func (c *ArtifactCache) cleanupAll() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	var cleanups []func()
 	for id, e := range c.entries {
 		if e.cleanup != nil {
-			e.cleanup()
+			cleanups = append(cleanups, e.cleanup)
 		}
 		delete(c.entries, id)
+	}
+	c.mu.Unlock()
+	for _, fn := range cleanups {
+		fn()
 	}
 }
 

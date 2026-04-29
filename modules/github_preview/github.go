@@ -327,7 +327,7 @@ func (c *GithubClient) getPR(ctx context.Context, pr int) (*ghPullRequest, error
 func (c *GithubClient) findWorkflowRun(ctx context.Context, branch string) (*ghWorkflowRun, error) {
 	c.log.Debug("searching workflow runs", zap.String("branch", branch), zap.String("workflow_filter", c.workflow))
 	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs?branch=%s&status=success&per_page=20",
-		c.apiURL, c.owner, c.repo, branch)
+		c.apiURL, c.owner, c.repo, url.QueryEscape(branch))
 
 	var runs ghWorkflowRunsResponse
 	if err := c.doJSON(ctx, url, &runs); err != nil {
