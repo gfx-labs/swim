@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"cloud.google.com/go/storage"
+	"github.com/gfx-labs/swim/pkg/archive"
 	"github.com/spf13/afero"
 	"google.golang.org/api/option"
 )
@@ -61,9 +62,9 @@ func (o *Overlay) openGcs(u *url.URL) (afero.Fs, error) {
 
 	ft := o.Type
 	if ft == "" {
-		ft = filetypeFromName(u.String())
+		ft = archive.FiletypeFromName(u.String())
 	}
-	fs, err := filesystemFromReader(ft, rc)
+	fs, err := archive.FilesystemFromReader(ft, rc)
 	if err != nil {
 		return nil, err
 	}

@@ -79,4 +79,34 @@ github.com/gfx-labs/swim/plugin/prerender
 ```
 
 
-this does prerender middleware, so it has the list of user agents.
+this does prerender middleware, so it has the list of user agents, and do like prerender-style forwarding of the request to the remote
+
+## github_preview
+
+```
+github.com/gfx-labs/swim/plugin/github_preview
+```
+
+github_preview is a middleware that dynamically serves GitHub Actions build artifacts. it extracts a PR number or branch name from the request hostname, resolves the latest successful build artifact, and registers it as a caddy filesystem for `file_server` and `try_files` to serve from.
+
+artifacts are cached on disk (zip served via random access) with an in-memory LRU read cache for hot files. closed PRs are pruned automatically.
+
+the github token needs Actions (read) + Pull requests (read) permissions (fine-grained PAT), or `repo` scope (classic PAT).
+
+```
+*.preview.oku.trade {
+    github_preview {
+        repo "oku-trade/trade"
+        token {env.GITHUB_TOKEN}
+        workflow "ci.yml"
+        artifact_name "build-artifacts"
+        workdir "dist"
+    }
+    try_files {path} /index.html
+    file_server
+}
+```
+
+the `host_re` regex (default `^pr-(.+?)\.(.+)$`) extracts the key from the hostname. if the captured value is all digits it resolves as a PR number, otherwise as a branch name. `pr-42.preview.oku.trade` resolves PR #42, `pr-master.preview.oku.trade` resolves the `master` branch.
+
+a management API is available at `/.well-known/github-preview/` (protected by `api_key` via `X-Api-Key` header): POST `/refresh` to warm the cache, DELETE `/refresh` to evict, GET `/status` to list cached entries. a public debug endpoint at `/.well-known/deployment-debug` shows cache state for the current hostname.

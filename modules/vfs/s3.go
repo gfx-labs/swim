@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/gfx-labs/swim/pkg/archive"
 	"github.com/spf13/afero"
 )
 
@@ -107,9 +108,9 @@ func (o *Overlay) openS3(u *url.URL) (afero.Fs, error) {
 	ft := o.Type
 	// TODO: perhaps we can also introspect via http content type?
 	if ft == "" {
-		ft = filetypeFromName(u.String())
+		ft = archive.FiletypeFromName(u.String())
 	}
-	fs, err := filesystemFromReader(ft, oo.Body)
+	fs, err := archive.FilesystemFromReader(ft, oo.Body)
 	if err != nil {
 		return nil, err
 	}

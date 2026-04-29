@@ -2,10 +2,12 @@ package vfs
 
 import (
 	"fmt"
-	"github.com/spf13/afero"
 	"net/http"
 	"net/url"
 	"os"
+
+	"github.com/gfx-labs/swim/pkg/archive"
+	"github.com/spf13/afero"
 )
 
 func (o *Overlay) resolvePlaceholders() {
@@ -68,13 +70,13 @@ func (o *Overlay) openFile(u *url.URL) (afero.Fs, error) {
 	}
 	ft := o.Type
 	if ft == "" {
-		ft = filetypeFromName(u.String())
+		ft = archive.FiletypeFromName(u.String())
 	}
 	file, err := os.Open(u.Path)
 	if err != nil {
 		return nil, err
 	}
-	fs, err := filesystemFromReader(ft, file)
+	fs, err := archive.FilesystemFromReader(ft, file)
 	if err != nil {
 		return nil, err
 	}
@@ -102,9 +104,9 @@ func (o *Overlay) openHttp(u *url.URL) (afero.Fs, error) {
 	ft := o.Type
 	// TODO: perhaps we can also introspect via http content type?
 	if ft == "" {
-		ft = filetypeFromName(u.String())
+		ft = archive.FiletypeFromName(u.String())
 	}
-	fs, err := filesystemFromReader(ft, resp.Body)
+	fs, err := archive.FilesystemFromReader(ft, resp.Body)
 	if err != nil {
 		return nil, err
 	}
