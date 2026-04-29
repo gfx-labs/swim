@@ -15,10 +15,11 @@ const (
 	defaultMetadataTTL     = 120 * time.Second
 	defaultMaxArtifacts    = 50
 	defaultMaxArtifactSize = 100 * 1024 * 1024 // 100MB
-	defaultApiPath         = "/_preview"
+	defaultApiPath         = "/.well-known/github-preview"
 	defaultApiURL          = "https://api.github.com"
-	defaultApiTimeout      = 30 * time.Second
 	defaultDownloadTimeout = 120 * time.Second
+	defaultPruneInterval   = 6 * time.Hour
+	defaultReadCacheSize   = 10 * 1024 * 1024 // 10MB per artifact
 	defaultRateLimit       = 10.0 // requests per second
 	defaultRateBurst       = 20
 )
@@ -90,6 +91,15 @@ func (g *GithubPreview) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					return d.Errf("invalid max_artifact_size: %s", d.Val())
 				}
 				g.MaxArtifactSize = val
+			case "read_cache_size":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				val, err := parseByteSize(d.Val())
+				if err != nil {
+					return d.Errf("invalid read_cache_size: %s", d.Val())
+				}
+				g.ReadCacheSize = val
 			case "api_path":
 				if !d.NextArg() {
 					return d.ArgErr()
@@ -105,6 +115,24 @@ func (g *GithubPreview) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					return d.ArgErr()
 				}
 				g.ApiURL = d.Val()
+			case "prune_interval":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				dur, err := time.ParseDuration(d.Val())
+				if err != nil {
+					return d.Errf("invalid prune_interval: %s", d.Val())
+				}
+				g.PruneInterval = Duration(dur)
+			case "max_artifact_age":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				dur, err := time.ParseDuration(d.Val())
+				if err != nil {
+					return d.Errf("invalid max_artifact_age: %s", d.Val())
+				}
+				g.MaxArtifactAge = Duration(dur)
 			case "stale_while_revalidate":
 				if !d.NextArg() {
 					return d.ArgErr()

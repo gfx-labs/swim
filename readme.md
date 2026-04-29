@@ -139,7 +139,7 @@ the github token requires the following permissions:
 | `max_artifacts` | `50` | max cached artifact filesystems (LRU eviction) |
 | `max_artifact_size` | `100MB` | max artifact download size |
 | `stale_while_revalidate` | `false` | serve stale cache while refreshing in background |
-| `api_path` | `/_preview` | path prefix for the management API |
+| `api_path` | `/.well-known/github-preview` | path prefix for the management API |
 | `refresh_token` | (none) | bearer token for the management API |
 | `error_template` | (built-in) | inline HTML template for error pages |
 | `error_template_file` | (none) | path to a custom error template file |
@@ -148,23 +148,23 @@ the github token requires the following permissions:
 
 all endpoints require `Authorization: Bearer <refresh_token>`.
 
-**POST `/_preview/refresh`** -- resolve and cache an artifact for a PR. optionally provide an `artifact_id` hint from CI.
+**POST `/.well-known/github-preview/refresh`** -- resolve and cache an artifact for a PR. optionally provide an `artifact_id` hint from CI.
 
 ```json
 {"pr": 42, "artifact_id": 12345}
 ```
 
-**DELETE `/_preview/refresh`** -- evict a PR from the cache.
+**DELETE `/.well-known/github-preview/refresh`** -- evict a PR from the cache.
 
 ```json
 {"pr": 42}
 ```
 
-**GET `/_preview/status`** -- list all cached PRs and cache stats.
+**GET `/.well-known/github-preview/status`** -- list all cached PRs and cache stats.
 
 ### debug endpoint
 
-every preview gets a debug page at `/.well-known/deployment-debug` (no auth required). it shows cache state and live GitHub API data for the PR derived from the hostname.
+every preview gets a debug page at `/.well-known/deployment-debug` (requires refresh token). it shows cache state and live GitHub API data for the PR derived from the hostname.
 
 ### CI integration
 
@@ -175,7 +175,7 @@ in the GitHub Actions workflow, after uploading the build artifact:
   run: |
     ARTIFACT_ID=$(gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts \
       --jq '.artifacts[] | select(.name=="dist") | .id')
-    curl -X POST https://preview.oku.trade/_preview/refresh \
+    curl -X POST https://preview.oku.trade/.well-known/github-preview/refresh \
       -H "Authorization: Bearer ${{ secrets.PREVIEW_REFRESH_TOKEN }}" \
       -H "Content-Type: application/json" \
       -d "{\"pr\": ${{ github.event.pull_request.number }}, \"artifact_id\": ${ARTIFACT_ID}}"
@@ -186,7 +186,7 @@ on PR close:
 ```yaml
 - name: Evict preview cache
   run: |
-    curl -X DELETE https://preview.oku.trade/_preview/refresh \
+    curl -X DELETE https://preview.oku.trade/.well-known/github-preview/refresh \
       -H "Authorization: Bearer ${{ secrets.PREVIEW_REFRESH_TOKEN }}" \
       -H "Content-Type: application/json" \
       -d "{\"pr\": ${{ github.event.pull_request.number }}}"

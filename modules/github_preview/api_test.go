@@ -3,7 +3,6 @@ package github_preview
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -75,7 +74,7 @@ func TestHandleEvict(t *testing.T) {
 	tests := []struct {
 		name         string
 		body         string
-		prePR        int
+		preKey       string
 		preArtifact  int64
 		wantStatus   int
 		wantEvicted  bool
@@ -84,7 +83,7 @@ func TestHandleEvict(t *testing.T) {
 		{
 			name:        "evict cached pr",
 			body:        `{"pr":42}`,
-			prePR:       42,
+			preKey:      "pr:42",
 			preArtifact: 100,
 			wantStatus:  http.StatusOK,
 			wantEvicted: true,
@@ -93,13 +92,13 @@ func TestHandleEvict(t *testing.T) {
 			name:        "evict non-existent pr",
 			body:        `{"pr":99}`,
 			wantStatus:  http.StatusOK,
-			wantEvicted: false,
+			wantEvicted: true,
 		},
 		{
 			name:         "missing pr field",
 			body:         `{}`,
 			wantStatus:   http.StatusBadRequest,
-			wantErrField: "pr is required",
+			wantErrField: "pr or branch is required",
 		},
 		{
 			name:         "invalid json",
@@ -114,11 +113,11 @@ func TestHandleEvict(t *testing.T) {
 				metadataCache: newMetadataCache(5 * time.Minute),
 				artifactCache: newArtifactCache(10),
 			}
-			if tt.prePR != 0 {
-				g.metadataCache.set(tt.prePR, tt.preArtifact, "")
+			if tt.preKey != "" {
+				g.metadataCache.set(tt.preKey, tt.preArtifact, "")
 			}
 
-			r := httptest.NewRequest(http.MethodDelete, "/_preview/refresh", bytes.NewBufferString(tt.body))
+			r := httptest.NewRequest(http.MethodDelete, "/.well-known/github-preview/refresh", bytes.NewBufferString(tt.body))
 			r.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
@@ -137,8 +136,8 @@ func TestHandleEvict(t *testing.T) {
 			}
 
 			// verify eviction actually removed the entry
-			if tt.wantEvicted {
-				entry, _ := g.metadataCache.get(tt.prePR)
+			if tt.wantEvicted && tt.preKey != "" {
+				entry, _ := g.metadataCache.get(tt.preKey)
 				require.Nil(t, entry)
 			}
 		})
@@ -148,29 +147,29 @@ func TestHandleEvict(t *testing.T) {
 func TestHandleStatus(t *testing.T) {
 	tests := []struct {
 		name             string
-		prs              map[int]int64
+		entries          map[string]int64
 		maxArtifacts     int
-		wantPRs          int
+		wantEntries      int
 		wantArtifacts    int
 		wantMaxArtifacts int
 	}{
 		{
 			name:             "empty cache",
-			prs:              nil,
+			entries:          nil,
 			maxArtifacts:     50,
-			wantPRs:          0,
+			wantEntries:      0,
 			wantArtifacts:    0,
 			wantMaxArtifacts: 50,
 		},
 		{
 			name: "some cached entries",
-			prs: map[int]int64{
-				1:   100,
-				200: 300,
+			entries: map[string]int64{
+				"pr:1":        100,
+				"branch:main": 300,
 			},
 			maxArtifacts:     25,
-			wantPRs:          2,
-			wantArtifacts:    0, // we only populate metadata, not artifact cache
+			wantEntries:      2,
+			wantArtifacts:    0,
 			wantMaxArtifacts: 25,
 		},
 	}
@@ -182,11 +181,11 @@ func TestHandleStatus(t *testing.T) {
 				MaxArtifacts:  tt.maxArtifacts,
 			}
 
-			for pr, artifactID := range tt.prs {
-				g.metadataCache.set(pr, artifactID, "")
+			for key, artifactID := range tt.entries {
+				g.metadataCache.set(key, artifactID, "")
 			}
 
-			r := httptest.NewRequest(http.MethodGet, "/_preview/status", nil)
+			r := httptest.NewRequest(http.MethodGet, "/.well-known/github-preview/status", nil)
 			w := httptest.NewRecorder()
 
 			err := g.handleStatus(w, r)
@@ -195,17 +194,15 @@ func TestHandleStatus(t *testing.T) {
 
 			var resp statusResponse
 			require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-			require.Len(t, resp.PRs, tt.wantPRs)
+			require.Len(t, resp.Entries, tt.wantEntries)
 			require.Equal(t, tt.wantArtifacts, resp.Cache.ArtifactCount)
 			require.Equal(t, tt.wantMaxArtifacts, resp.Cache.MaxArtifacts)
 
-			// verify individual PRs have expected artifact IDs
-			for pr, artifactID := range tt.prs {
-				key := fmt.Sprintf("%d", pr)
-				ps, ok := resp.PRs[key]
-				require.True(t, ok, "expected pr %d in response", pr)
-				require.Equal(t, artifactID, ps.ArtifactID)
-				require.NotEmpty(t, ps.ResolvedAt)
+			for key, artifactID := range tt.entries {
+				es, ok := resp.Entries[key]
+				require.True(t, ok, "expected key %s in response", key)
+				require.Equal(t, artifactID, es.ArtifactID)
+				require.NotEmpty(t, es.ResolvedAt)
 			}
 		})
 	}
@@ -221,25 +218,25 @@ func TestHandleAPIRouting(t *testing.T) {
 		{
 			name:       "unknown path returns 404",
 			method:     http.MethodGet,
-			path:       "/_preview/unknown",
+			path:       "/.well-known/github-preview/unknown",
 			wantStatus: http.StatusNotFound,
 		},
 		{
 			name:       "refresh with GET returns 404",
 			method:     http.MethodGet,
-			path:       "/_preview/refresh",
+			path:       "/.well-known/github-preview/refresh",
 			wantStatus: http.StatusNotFound,
 		},
 		{
 			name:       "status with POST returns 404",
 			method:     http.MethodPost,
-			path:       "/_preview/status",
+			path:       "/.well-known/github-preview/status",
 			wantStatus: http.StatusNotFound,
 		},
 		{
 			name:       "status with GET dispatches correctly",
 			method:     http.MethodGet,
-			path:       "/_preview/status",
+			path:       "/.well-known/github-preview/status",
 			wantStatus: http.StatusOK,
 		},
 	}
@@ -247,7 +244,7 @@ func TestHandleAPIRouting(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := &GithubPreview{
 				RefreshToken:  "test-token",
-				ApiPath:       "/_preview",
+				ApiPath:       "/.well-known/github-preview",
 				metadataCache: newMetadataCache(5 * time.Minute),
 				artifactCache: newArtifactCache(10),
 			}
@@ -275,29 +272,29 @@ func TestHandleAPIUnauthorized(t *testing.T) {
 		{
 			name:   "POST refresh",
 			method: http.MethodPost,
-			path:   "/_preview/refresh",
+			path:   "/.well-known/github-preview/refresh",
 		},
 		{
 			name:   "DELETE refresh",
 			method: http.MethodDelete,
-			path:   "/_preview/refresh",
+			path:   "/.well-known/github-preview/refresh",
 		},
 		{
 			name:   "GET status",
 			method: http.MethodGet,
-			path:   "/_preview/status",
+			path:   "/.well-known/github-preview/status",
 		},
 		{
 			name:   "GET unknown",
 			method: http.MethodGet,
-			path:   "/_preview/unknown",
+			path:   "/.well-known/github-preview/unknown",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := &GithubPreview{
 				RefreshToken:  "real-token",
-				ApiPath:       "/_preview",
+				ApiPath:       "/.well-known/github-preview",
 				metadataCache: newMetadataCache(5 * time.Minute),
 				artifactCache: newArtifactCache(10),
 			}

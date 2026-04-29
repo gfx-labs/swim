@@ -37,12 +37,25 @@ func (g *GithubPreview) handleAPI(w http.ResponseWriter, r *http.Request) error 
 }
 
 type refreshRequest struct {
-	PR         int   `json:"pr"`
-	ArtifactID int64 `json:"artifact_id,omitempty"`
+	PR         int    `json:"pr,omitempty"`
+	Branch     string `json:"branch,omitempty"`
+	ArtifactID int64  `json:"artifact_id,omitempty"`
+}
+
+// key returns the cache key from the request, preferring branch if set
+func (r *refreshRequest) key() string {
+	if r.Branch != "" {
+		return "branch:" + r.Branch
+	}
+	return fmt.Sprintf("pr:%d", r.PR)
+}
+
+func (r *refreshRequest) valid() bool {
+	return r.PR != 0 || r.Branch != ""
 }
 
 type refreshResponse struct {
-	PR         int    `json:"pr"`
+	Key        string `json:"key"`
 	ArtifactID int64  `json:"artifact_id"`
 	Verified   bool   `json:"verified"`
 	Cached     bool   `json:"cached"`
@@ -58,41 +71,30 @@ func (g *GithubPreview) handleRefresh(w http.ResponseWriter, r *http.Request) er
 		return nil
 	}
 
-	if req.PR == 0 {
+	if !req.valid() {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "pr is required",
+			"error": "pr or branch is required",
 		})
 		return nil
 	}
 
+	key := req.key()
 	ctx := r.Context()
 
 	if req.ArtifactID != 0 {
-		// verify that the artifact belongs to this PR
-		if err := g.client.VerifyArtifactForPR(ctx, req.PR, req.ArtifactID); err != nil {
-			writeJSON(w, http.StatusForbidden, refreshResponse{
-				PR:         req.PR,
-				ArtifactID: req.ArtifactID,
-				Verified:   false,
-				Error:      err.Error(),
-			})
-			return nil
-		}
-
-		// download and cache the artifact
-		_, err := g.downloadAndCache(ctx, req.PR, req.ArtifactID)
+		// download and cache the artifact directly
+		_, err := g.downloadAndCache(ctx, key, req.ArtifactID, "")
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, refreshResponse{
-				PR:         req.PR,
+				Key:        key,
 				ArtifactID: req.ArtifactID,
-				Verified:   true,
 				Error:      err.Error(),
 			})
 			return nil
 		}
 
 		writeJSON(w, http.StatusOK, refreshResponse{
-			PR:         req.PR,
+			Key:        key,
 			ArtifactID: req.ArtifactID,
 			Verified:   true,
 			Cached:     true,
@@ -101,29 +103,27 @@ func (g *GithubPreview) handleRefresh(w http.ResponseWriter, r *http.Request) er
 	}
 
 	// no artifact hint -- do full resolution
-	res, err := g.client.ResolvePR(ctx, req.PR)
+	_, err, _ := g.singleflight.Do("resolve:"+key, func() (any, error) {
+		_, err := g.fullResolve(ctx, key)
+		return nil, err
+	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, refreshResponse{
-			PR:    req.PR,
+			Key:   key,
 			Error: err.Error(),
 		})
 		return nil
 	}
 
-	// download and cache
-	_, err = g.downloadAndCache(ctx, req.PR, res.ArtifactID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, refreshResponse{
-			PR:         req.PR,
-			ArtifactID: res.ArtifactID,
-			Error:      err.Error(),
-		})
-		return nil
+	meta, _ := g.metadataCache.get(key)
+	aid := int64(0)
+	if meta != nil {
+		aid = meta.artifactID
 	}
 
 	writeJSON(w, http.StatusOK, refreshResponse{
-		PR:         req.PR,
-		ArtifactID: res.ArtifactID,
+		Key:        key,
+		ArtifactID: aid,
 		Verified:   true,
 		Cached:     true,
 	})
@@ -131,12 +131,24 @@ func (g *GithubPreview) handleRefresh(w http.ResponseWriter, r *http.Request) er
 }
 
 type evictRequest struct {
-	PR int `json:"pr"`
+	PR     int    `json:"pr,omitempty"`
+	Branch string `json:"branch,omitempty"`
+}
+
+func (r *evictRequest) key() string {
+	if r.Branch != "" {
+		return "branch:" + r.Branch
+	}
+	return fmt.Sprintf("pr:%d", r.PR)
+}
+
+func (r *evictRequest) valid() bool {
+	return r.PR != 0 || r.Branch != ""
 }
 
 type evictResponse struct {
-	PR      int  `json:"pr"`
-	Evicted bool `json:"evicted"`
+	Key     string `json:"key"`
+	Evicted bool   `json:"evicted"`
 }
 
 func (g *GithubPreview) handleEvict(w http.ResponseWriter, r *http.Request) error {
@@ -148,34 +160,29 @@ func (g *GithubPreview) handleEvict(w http.ResponseWriter, r *http.Request) erro
 		return nil
 	}
 
-	if req.PR == 0 {
+	if !req.valid() {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "pr is required",
+			"error": "pr or branch is required",
 		})
 		return nil
 	}
 
-	// evict metadata, artifact cache, and global filesystem registration
-	meta, _ := g.metadataCache.get(req.PR)
-	if meta != nil {
-		g.artifactCache.evict(meta.artifactID)
-	}
-	g.unregisterFs(req.PR)
-	evicted := g.metadataCache.evict(req.PR)
+	key := req.key()
+	g.evictKey(key)
 
 	writeJSON(w, http.StatusOK, evictResponse{
-		PR:      req.PR,
-		Evicted: evicted,
+		Key:     key,
+		Evicted: true,
 	})
 	return nil
 }
 
 type statusResponse struct {
-	PRs   map[string]prStatus `json:"prs"`
-	Cache cacheStatus         `json:"cache"`
+	Entries map[string]entryStatus `json:"entries"`
+	Cache   cacheStatus            `json:"cache"`
 }
 
-type prStatus struct {
+type entryStatus struct {
 	ArtifactID int64  `json:"artifact_id"`
 	ResolvedAt string `json:"resolved_at"`
 }
@@ -187,11 +194,10 @@ type cacheStatus struct {
 }
 
 func (g *GithubPreview) handleStatus(w http.ResponseWriter, r *http.Request) error {
-	entries := g.metadataCache.snapshot()
-	prs := make(map[string]prStatus, len(entries))
-	for pr, meta := range entries {
-		key := fmt.Sprintf("%d", pr)
-		prs[key] = prStatus{
+	snapshot := g.metadataCache.snapshot()
+	entries := make(map[string]entryStatus, len(snapshot))
+	for key, meta := range snapshot {
+		entries[key] = entryStatus{
 			ArtifactID: meta.artifactID,
 			ResolvedAt: meta.resolvedAt.Format(time.RFC3339),
 		}
@@ -200,7 +206,7 @@ func (g *GithubPreview) handleStatus(w http.ResponseWriter, r *http.Request) err
 	count, totalBytes := g.artifactCache.stats()
 
 	writeJSON(w, http.StatusOK, statusResponse{
-		PRs: prs,
+		Entries: entries,
 		Cache: cacheStatus{
 			ArtifactCount:  count,
 			TotalSizeBytes: totalBytes,

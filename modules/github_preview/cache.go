@@ -23,58 +23,59 @@ type artifactEntry struct {
 	fs         afero.Fs
 	sizeBytes  int64
 	lastAccess time.Time
+	cleanup    func() // removes temp file on disk
 }
 
-// MetadataCache maps PR numbers to artifact metadata with TTL expiry
+// MetadataCache maps keys (PR numbers or branch names) to artifact metadata with TTL expiry
 type MetadataCache struct {
 	mu      sync.RWMutex
-	entries map[int]*metadataEntry
+	entries map[string]*metadataEntry
 	ttl     time.Duration
 }
 
 func newMetadataCache(ttl time.Duration) *MetadataCache {
 	return &MetadataCache{
-		entries: make(map[int]*metadataEntry),
+		entries: make(map[string]*metadataEntry),
 		ttl:     ttl,
 	}
 }
 
 // get returns the entry and whether it's fresh. returns nil if no entry exists.
-func (c *MetadataCache) get(pr int) (entry *metadataEntry, fresh bool) {
+func (c *MetadataCache) get(key string) (entry *metadataEntry, fresh bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	e, ok := c.entries[pr]
+	e, ok := c.entries[key]
 	if !ok {
 		return nil, false
 	}
 	return e, !e.isStale(c.ttl)
 }
 
-func (c *MetadataCache) set(pr int, artifactID int64, etag string) {
+func (c *MetadataCache) set(key string, artifactID int64, etag string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.entries[pr] = &metadataEntry{
+	c.entries[key] = &metadataEntry{
 		artifactID: artifactID,
 		etag:       etag,
 		resolvedAt: time.Now(),
 	}
 }
 
-func (c *MetadataCache) evict(pr int) bool {
+func (c *MetadataCache) evict(key string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_, ok := c.entries[pr]
+	_, ok := c.entries[key]
 	if ok {
-		delete(c.entries, pr)
+		delete(c.entries, key)
 	}
 	return ok
 }
 
 // snapshot returns a copy of all entries for status reporting
-func (c *MetadataCache) snapshot() map[int]*metadataEntry {
+func (c *MetadataCache) snapshot() map[string]*metadataEntry {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	out := make(map[int]*metadataEntry, len(c.entries))
+	out := make(map[string]*metadataEntry, len(c.entries))
 	for k, v := range c.entries {
 		cp := *v
 		out[k] = &cp
@@ -107,7 +108,7 @@ func (c *ArtifactCache) get(artifactID int64) (afero.Fs, bool) {
 	return e.fs, true
 }
 
-func (c *ArtifactCache) set(artifactID int64, fs afero.Fs, sizeBytes int64) {
+func (c *ArtifactCache) set(artifactID int64, fs afero.Fs, sizeBytes int64, cleanup func()) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// evict LRU if at capacity
@@ -118,6 +119,7 @@ func (c *ArtifactCache) set(artifactID int64, fs afero.Fs, sizeBytes int64) {
 		fs:         fs,
 		sizeBytes:  sizeBytes,
 		lastAccess: time.Now(),
+		cleanup:    cleanup,
 	}
 }
 
@@ -133,21 +135,51 @@ func (c *ArtifactCache) evictOldestLocked() {
 		}
 	}
 	if !first {
+		e := c.entries[oldestID]
+		if e.cleanup != nil {
+			e.cleanup()
+		}
 		delete(c.entries, oldestID)
-		// note: we can't unregister from FileSystems here because we don't
-		// know the PR number. the caller (handler) is responsible for
-		// keeping the global map in sync when it detects a cache miss.
 	}
 }
 
 func (c *ArtifactCache) evict(artifactID int64) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_, ok := c.entries[artifactID]
+	e, ok := c.entries[artifactID]
 	if ok {
+		if e.cleanup != nil {
+			e.cleanup()
+		}
 		delete(c.entries, artifactID)
 	}
 	return ok
+}
+
+// cleanupAll removes all temp files for all cached artifacts
+func (c *ArtifactCache) cleanupAll() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id, e := range c.entries {
+		if e.cleanup != nil {
+			e.cleanup()
+		}
+		delete(c.entries, id)
+	}
+}
+
+// staleEntries returns artifact IDs that haven't been accessed within maxAge
+func (c *ArtifactCache) staleEntries(maxAge time.Duration) []int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var stale []int64
+	cutoff := time.Now().Add(-maxAge)
+	for id, e := range c.entries {
+		if e.lastAccess.Before(cutoff) {
+			stale = append(stale, id)
+		}
+	}
+	return stale
 }
 
 // stats returns cache statistics for status reporting

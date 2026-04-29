@@ -6,11 +6,10 @@ import (
 	"os"
 )
 
-const defaultErrorTemplate = `preview not available{{if .PR}} for PR #{{.PR}}{{end}}{{if .Host}} ({{.Host}}){{end}}: {{.Error}}
+const defaultErrorTemplate = `preview not available{{if .Host}} ({{.Host}}){{end}}: {{.Error}}
 `
 
 type errorData struct {
-	PR    int
 	Host  string
 	Error string
 }

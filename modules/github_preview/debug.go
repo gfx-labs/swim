@@ -3,11 +3,12 @@ package github_preview
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
 type debugResponse struct {
-	PR        int          `json:"pr"`
+	Key       string       `json:"key"`
 	Cache     debugCache   `json:"cache"`
 	Github    debugGithub  `json:"github"`
 	Config    debugConfig  `json:"config"`
@@ -59,11 +60,11 @@ type debugConfig struct {
 	MetadataTTL  string `json:"metadata_ttl"`
 }
 
-func (g *GithubPreview) handleDebug(w http.ResponseWriter, r *http.Request, pr int) error {
+func (g *GithubPreview) handleDebug(w http.ResponseWriter, r *http.Request, key string) error {
 	w.Header().Set("Cache-Control", "no-store")
 
 	resp := debugResponse{
-		PR: pr,
+		Key: key,
 		Config: debugConfig{
 			Repo:         g.Repo,
 			Workflow:     g.Workflow,
@@ -75,7 +76,7 @@ func (g *GithubPreview) handleDebug(w http.ResponseWriter, r *http.Request, pr i
 	}
 
 	// populate cache status
-	meta, fresh := g.metadataCache.get(pr)
+	meta, fresh := g.metadataCache.get(key)
 	switch {
 	case meta == nil:
 		resp.Cache.Status = "miss"
@@ -98,20 +99,32 @@ func (g *GithubPreview) handleDebug(w http.ResponseWriter, r *http.Request, pr i
 	// fetch live github data (uses tryAcquire -- fails fast if rate limited)
 	ctx := r.Context()
 
-	prInfo, err := g.client.GetPRInfo(ctx, pr)
-	if err != nil {
-		resp.Errors = append(resp.Errors, err.Error())
-	} else {
-		resp.Github.PR = &debugPR{
-			Number:  prInfo.Number,
-			Title:   prInfo.Title,
-			State:   prInfo.State,
-			HeadSHA: prInfo.Head.SHA,
-			URL:     prInfo.HTMLURL,
+	// determine branch name for workflow run lookup
+	var branch string
+	if strings.HasPrefix(key, "branch:") {
+		branch = strings.TrimPrefix(key, "branch:")
+	} else if strings.HasPrefix(key, "pr:") {
+		prStr := strings.TrimPrefix(key, "pr:")
+		prNum, err := strconvAtoi(prStr)
+		if err == nil {
+			prInfo, err := g.client.GetPRInfo(ctx, prNum)
+			if err != nil {
+				resp.Errors = append(resp.Errors, err.Error())
+			} else {
+				resp.Github.PR = &debugPR{
+					Number:  prInfo.Number,
+					Title:   prInfo.Title,
+					State:   prInfo.State,
+					HeadSHA: prInfo.Head.SHA,
+					URL:     prInfo.HTMLURL,
+				}
+				branch = prInfo.Head.Ref
+			}
 		}
+	}
 
-		// try to get workflow run for the PR's branch
-		run, err := g.client.GetLatestRunInfo(ctx, prInfo.Head.Ref)
+	if branch != "" {
+		run, err := g.client.GetLatestRunInfo(ctx, branch)
 		if err != nil {
 			resp.Errors = append(resp.Errors, err.Error())
 		} else {
@@ -124,7 +137,6 @@ func (g *GithubPreview) handleDebug(w http.ResponseWriter, r *http.Request, pr i
 				URL:        run.HTMLURL,
 			}
 
-			// try to get artifact
 			artifact, err := g.client.GetArtifactInfo(ctx, run.ID)
 			if err != nil {
 				resp.Errors = append(resp.Errors, err.Error())
@@ -136,11 +148,10 @@ func (g *GithubPreview) handleDebug(w http.ResponseWriter, r *http.Request, pr i
 					Expired:   artifact.Expired,
 				}
 
-				// check if cached artifact is outdated
 				if meta != nil && meta.artifactID != artifact.ID {
-				resp.Errors = append(resp.Errors,
-					fmt.Sprintf("cached artifact %d is outdated, latest is %d (cache will refresh on next request or via %s/refresh)",
-						meta.artifactID, artifact.ID, g.ApiPath))
+					resp.Errors = append(resp.Errors,
+						fmt.Sprintf("cached artifact %d is outdated, latest is %d (cache will refresh on next request or via %s/refresh)",
+							meta.artifactID, artifact.ID, g.ApiPath))
 				}
 			}
 		}

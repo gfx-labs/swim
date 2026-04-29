@@ -9,58 +9,66 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestExtractPR(t *testing.T) {
+func TestExtractKey(t *testing.T) {
 	tests := []struct {
-		name   string
-		hostRe string
-		host   string
-		wantPR int
-		wantOk bool
+		name    string
+		hostRe  string
+		host    string
+		wantKey string
+		wantOk  bool
 	}{
 		{
-			name:   "default regex",
-			hostRe: defaultHostRe,
-			host:   "pr-42.preview.oku.trade",
-			wantPR: 42,
-			wantOk: true,
+			name:    "default regex: PR number",
+			hostRe:  defaultHostRe,
+			host:    "pr-42.preview.oku.trade",
+			wantKey: "pr:42",
+			wantOk:  true,
 		},
 		{
-			name:   "default regex with port",
-			hostRe: defaultHostRe,
-			host:   "pr-42.preview.oku.trade:443",
-			wantPR: 42,
-			wantOk: true,
+			name:    "default regex: branch name",
+			hostRe:  defaultHostRe,
+			host:    "pr-master.preview.oku.trade",
+			wantKey: "branch:master",
+			wantOk:  true,
 		},
 		{
-			name:   "default regex no match",
-			hostRe: defaultHostRe,
-			host:   "feature-xyz.preview.oku.trade",
-			wantOk: false,
+			name:    "default regex: with port",
+			hostRe:  defaultHostRe,
+			host:    "pr-42.preview.oku.trade:443",
+			wantKey: "pr:42",
+			wantOk:  true,
 		},
 		{
-			name:   "default regex bare number",
+			name:   "default regex: no match",
 			hostRe: defaultHostRe,
 			host:   "42.preview.oku.trade",
 			wantOk: false,
 		},
 		{
-			name:   "custom regex bare number",
-			hostRe: `^(\d+)\.(.+)$`,
-			host:   "42.preview.oku.trade",
-			wantPR: 42,
-			wantOk: true,
+			name:    "custom regex: bare number is PR",
+			hostRe:  `^(\d+)\.(.+)$`,
+			host:    "42.preview.oku.trade",
+			wantKey: "pr:42",
+			wantOk:  true,
 		},
 		{
-			name:   "custom regex deploy prefix",
-			hostRe: `^deploy-(\d+)-preview\.(.+)$`,
-			host:   "deploy-42-preview.staging.oku.trade",
-			wantPR: 42,
-			wantOk: true,
+			name:    "custom regex: branch name",
+			hostRe:  `^(.+?)\.staging\.oku\.trade$`,
+			host:    "master.staging.oku.trade",
+			wantKey: "branch:master",
+			wantOk:  true,
 		},
 		{
-			name:   "non-numeric capture group",
-			hostRe: `^pr-(\w+)\.(.+)$`,
-			host:   "pr-abc.foo.com",
+			name:    "custom regex: feature branch",
+			hostRe:  `^(.+?)\.staging\.oku\.trade$`,
+			host:    "feature-xyz.staging.oku.trade",
+			wantKey: "branch:feature-xyz",
+			wantOk:  true,
+		},
+		{
+			name:   "custom regex: no match",
+			hostRe: `^(.+?)\.staging\.oku\.trade$`,
+			host:   "preview.other.com",
 			wantOk: false,
 		},
 		{
@@ -75,12 +83,6 @@ func TestExtractPR(t *testing.T) {
 			host:   "pr-1." + strings.Repeat("a", 250) + ".com",
 			wantOk: false,
 		},
-		{
-			name:   "no regex match at all",
-			hostRe: `^completely-different-(\d+)$`,
-			host:   "pr-42.preview.oku.trade",
-			wantOk: false,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -91,10 +93,10 @@ func TestExtractPR(t *testing.T) {
 			r := httptest.NewRequest("GET", "/", nil)
 			r.Host = tt.host
 
-			pr, ok := g.extractPR(r)
+			key, ok := g.extractKey(r)
 			require.Equal(t, tt.wantOk, ok)
 			if tt.wantOk {
-				require.Equal(t, tt.wantPR, pr)
+				require.Equal(t, tt.wantKey, key)
 			}
 		})
 	}

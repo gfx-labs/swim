@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/gfx-labs/swim/pkg/archive"
 	"github.com/spf13/afero"
+	"go.uber.org/zap"
 )
 
 // GithubClient handles all GitHub API interactions
@@ -23,22 +26,22 @@ type GithubClient struct {
 	artifactName string
 	artifactType string
 
-	apiClient      *http.Client
-	downloadClient *http.Client
-	limiter        *RateLimiter
+	client  *http.Client
+	limiter *RateLimiter
+	log     *zap.Logger
 }
 
 type githubClientConfig struct {
-	owner           string
-	repo            string
-	token           string
-	apiURL          string
-	workflow        string
-	artifactName    string
-	artifactType    string
-	apiTimeout      time.Duration
-	downloadTimeout time.Duration
-	limiter         *RateLimiter
+	owner        string
+	repo         string
+	token        string
+	apiURL       string
+	workflow     string
+	artifactName string
+	artifactType string
+	timeout      time.Duration
+	limiter      *RateLimiter
+	log          *zap.Logger
 }
 
 func newGithubClient(cfg githubClientConfig) *GithubClient {
@@ -50,17 +53,17 @@ func newGithubClient(cfg githubClientConfig) *GithubClient {
 		workflow:     cfg.workflow,
 		artifactName: cfg.artifactName,
 		artifactType: cfg.artifactType,
-		apiClient: &http.Client{
-			Timeout: cfg.apiTimeout,
-			// don't follow redirects automatically for artifact downloads
+		client: &http.Client{
+			Timeout: cfg.timeout,
+			// strip auth header on redirect so the bearer token doesn't
+			// leak to the presigned URL host when downloading artifacts
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
+				req.Header.Del("Authorization")
+				return nil
 			},
 		},
-		downloadClient: &http.Client{
-			Timeout: cfg.downloadTimeout,
-		},
 		limiter: cfg.limiter,
+		log:     cfg.log,
 	}
 }
 
@@ -98,6 +101,7 @@ type ghArtifact struct {
 	Name               string `json:"name"`
 	SizeInBytes        int64  `json:"size_in_bytes"`
 	Expired            bool   `json:"expired"`
+	Digest             string `json:"digest"`
 	ArchiveDownloadURL string `json:"archive_download_url"`
 	WorkflowRun        *struct {
 		ID         int64  `json:"id"`
@@ -152,87 +156,75 @@ func (c *GithubClient) ResolvePR(ctx context.Context, pr int) (*ResolutionResult
 	}, nil
 }
 
-// DownloadArtifact downloads and extracts an artifact into an afero filesystem
-func (c *GithubClient) DownloadArtifact(ctx context.Context, artifactID int64, maxSize int64) (afero.Fs, int64, error) {
+// DownloadArtifact downloads an artifact zip to a temp file on disk and returns
+// an afero.Fs backed by the on-disk zip (random access, no full extraction into memory).
+// the cleanup function removes the temp file and must be called when the filesystem
+// is no longer needed. if expectedDigest is non-empty, the downloaded content is
+// verified against it (format: "sha256:<hex>").
+func (c *GithubClient) DownloadArtifact(ctx context.Context, artifactID int64, maxSize int64, expectedDigest string) (afero.Fs, int64, func(), error) {
 	if err := c.limiter.wait(ctx); err != nil {
-		return nil, 0, fmt.Errorf("rate limited: %w", err)
+		return nil, 0, nil, fmt.Errorf("rate limited: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/repos/%s/%s/actions/artifacts/%d/zip",
+	dlURL := fmt.Sprintf("%s/repos/%s/%s/actions/artifacts/%d/zip",
 		c.apiURL, c.owner, c.repo, artifactID)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dlURL, nil)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	c.setAuth(req)
 
-	// first request gets a 302 redirect to a presigned URL
-	resp, err := c.apiClient.Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, 0, fmt.Errorf("artifact %d not found (may have expired)", artifactID)
+		return nil, 0, nil, fmt.Errorf("artifact %d not found (may have expired)", artifactID)
 	}
-
-	downloadURL := ""
-	if resp.StatusCode == http.StatusFound {
-		downloadURL = resp.Header.Get("Location")
-	} else if resp.StatusCode == http.StatusOK {
-		// some API versions return the content directly
-		downloadURL = ""
-	} else {
-		return nil, 0, fmt.Errorf("unexpected status %d fetching artifact %d", resp.StatusCode, artifactID)
+	if resp.StatusCode != http.StatusOK {
+		return nil, 0, nil, fmt.Errorf("unexpected status %d fetching artifact %d", resp.StatusCode, artifactID)
 	}
-
-	var body io.ReadCloser
-	var contentLength int64
-
-	if downloadURL != "" {
-		// follow the redirect with the download client (no auth needed for presigned URL)
-		dlReq, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
-		if err != nil {
-			return nil, 0, err
-		}
-		dlResp, err := c.downloadClient.Do(dlReq)
-		if err != nil {
-			return nil, 0, err
-		}
-		if dlResp.StatusCode != http.StatusOK {
-			dlResp.Body.Close()
-			return nil, 0, fmt.Errorf("download failed with status %d", dlResp.StatusCode)
-		}
-		body = dlResp.Body
-		contentLength = dlResp.ContentLength
-	} else {
-		body = resp.Body
-		contentLength = resp.ContentLength
-	}
-	defer body.Close()
 
 	// check content-length against limit if available
-	if contentLength > 0 && contentLength > maxSize {
-		return nil, 0, fmt.Errorf("artifact %d size %d exceeds max %d", artifactID, contentLength, maxSize)
+	if resp.ContentLength > 0 && resp.ContentLength > maxSize {
+		return nil, 0, nil, fmt.Errorf("artifact %d size %d exceeds max %d", artifactID, resp.ContentLength, maxSize)
 	}
 
-	// wrap reader with size limit enforcement
-	limited := io.LimitReader(body, maxSize+1)
+	// build a namespaced path: {tmpdir}/swim-github-preview/{host}/{owner}/{repo}/{workflow}/{artifact_name}/{artifact_id}.zip
+	apiHost := "github.com"
+	if parsedURL, parseErr := url.Parse(c.apiURL); parseErr == nil && parsedURL.Host != "" {
+		apiHost = parsedURL.Host
+	}
+	workflow := c.workflow
+	if workflow == "" {
+		workflow = "_default"
+	}
+	zipPath := filepath.Join(
+		os.TempDir(), "swim-github-preview",
+		apiHost, c.owner, c.repo, workflow, c.artifactName,
+		fmt.Sprintf("%d.zip", artifactID),
+	)
 
-	fs, err := archive.FilesystemFromReader(c.artifactType, limited)
+	fs, size, digest, cleanup, err := archive.ZipFsFromDisk(resp.Body, maxSize, zipPath)
 	if err != nil {
-		return nil, 0, fmt.Errorf("extract artifact %d: %w", artifactID, err)
+		return nil, 0, nil, fmt.Errorf("extract artifact %d: %w", artifactID, err)
 	}
 
-	// use content-length if available for size tracking
-	size := contentLength
-	if size <= 0 {
-		size = 0
+	if expectedDigest != "" && digest != expectedDigest {
+		cleanup()
+		return nil, 0, nil, fmt.Errorf("artifact %d digest mismatch: expected %s, got %s", artifactID, expectedDigest, digest)
 	}
 
-	return fs, size, nil
+	c.log.Debug("downloaded artifact",
+		zap.Int64("artifact_id", artifactID),
+		zap.Int64("size_bytes", size),
+		zap.String("digest", digest),
+	)
+
+	return fs, size, cleanup, nil
 }
 
 // VerifyArtifactForPR checks that an artifact ID belongs to a workflow run
@@ -285,6 +277,16 @@ func (c *GithubClient) GetPRInfo(ctx context.Context, pr int) (*ghPullRequest, e
 	return c.getPR(ctx, pr)
 }
 
+// GetPRState fetches just the state of a PR ("open", "closed").
+// uses the blocking rate limiter since this is called from the background pruner.
+func (c *GithubClient) GetPRState(ctx context.Context, pr int) (string, error) {
+	prInfo, err := c.getPR(ctx, pr)
+	if err != nil {
+		return "", err
+	}
+	return prInfo.State, nil
+}
+
 // GetLatestRunInfo fetches the latest successful workflow run for a branch.
 // uses tryAcquire so it fails fast if rate limited.
 func (c *GithubClient) GetLatestRunInfo(ctx context.Context, branch string) (*ghWorkflowRun, error) {
@@ -305,6 +307,7 @@ func (c *GithubClient) GetArtifactInfo(ctx context.Context, runID int64) (*ghArt
 
 // getPR fetches a single PR by number: GET /repos/{owner}/{repo}/pulls/{number}
 func (c *GithubClient) getPR(ctx context.Context, pr int) (*ghPullRequest, error) {
+	c.log.Debug("fetching pull request", zap.Int("pr", pr))
 	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d",
 		c.apiURL, c.owner, c.repo, pr)
 
@@ -312,10 +315,17 @@ func (c *GithubClient) getPR(ctx context.Context, pr int) (*ghPullRequest, error
 	if err := c.doJSON(ctx, url, &prInfo); err != nil {
 		return nil, err
 	}
+	c.log.Debug("found pull request",
+		zap.Int("pr", pr),
+		zap.String("branch", prInfo.Head.Ref),
+		zap.String("sha", prInfo.Head.SHA),
+		zap.String("state", prInfo.State),
+	)
 	return &prInfo, nil
 }
 
 func (c *GithubClient) findWorkflowRun(ctx context.Context, branch string) (*ghWorkflowRun, error) {
+	c.log.Debug("searching workflow runs", zap.String("branch", branch), zap.String("workflow_filter", c.workflow))
 	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs?branch=%s&status=success&per_page=20",
 		c.apiURL, c.owner, c.repo, branch)
 
@@ -332,6 +342,12 @@ func (c *GithubClient) findWorkflowRun(ctx context.Context, branch string) (*ghW
 				continue
 			}
 		}
+		c.log.Debug("found workflow run",
+			zap.Int64("run_id", run.ID),
+			zap.String("path", run.Path),
+			zap.String("head_sha", run.HeadSHA),
+			zap.String("conclusion", run.Conclusion),
+		)
 		return run, nil
 	}
 
@@ -342,6 +358,7 @@ func (c *GithubClient) findWorkflowRun(ctx context.Context, branch string) (*ghW
 }
 
 func (c *GithubClient) findArtifact(ctx context.Context, runID int64) (*ghArtifact, error) {
+	c.log.Debug("searching artifacts", zap.Int64("run_id", runID), zap.String("artifact_name", c.artifactName))
 	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d/artifacts",
 		c.apiURL, c.owner, c.repo, runID)
 
@@ -372,7 +389,7 @@ func (c *GithubClient) doJSON(ctx context.Context, url string, v any) error {
 	c.setAuth(req)
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	resp, err := c.downloadClient.Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return err
 	}

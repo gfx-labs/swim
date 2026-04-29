@@ -13,20 +13,21 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func newTestClient(url string, opts ...func(*githubClientConfig)) *GithubClient {
 	cfg := githubClientConfig{
-		owner:           "testowner",
-		repo:            "testrepo",
-		token:           "test-token",
-		apiURL:          url,
-		workflow:        "build.yml",
-		artifactName:    "site",
-		artifactType:    ".zip",
-		apiTimeout:      5 * time.Second,
-		downloadTimeout: 5 * time.Second,
-		limiter:         newRateLimiter(1000, 1000),
+		owner:        "testowner",
+		repo:         "testrepo",
+		token:        "test-token",
+		apiURL:       url,
+		workflow:     "build.yml",
+		artifactName: "site",
+		artifactType: ".zip",
+		timeout:      5 * time.Second,
+		limiter:      newRateLimiter(1000, 1000),
+		log:          zap.NewNop(),
 	}
 	for _, o := range opts {
 		o(&cfg)
@@ -417,27 +418,21 @@ func TestDownloadArtifact(t *testing.T) {
 	require.NoError(t, zw.Close())
 	zipBytes := zipBuf.Bytes()
 
-	// download server serves the actual zip content
-	dlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// server serves the zip directly (client follows redirects automatically)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/zip")
 		w.Write(zipBytes)
 	}))
-	defer dlSrv.Close()
+	defer srv.Close()
 
-	// api server returns a 302 redirect to the download server
-	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Contains(t, r.URL.Path, "/repos/testowner/testrepo/actions/artifacts/9001/zip")
-		w.Header().Set("Location", dlSrv.URL+"/download.zip")
-		w.WriteHeader(http.StatusFound)
-	}))
-	defer apiSrv.Close()
-
-	client := newTestClient(apiSrv.URL)
-	fs, size, err := client.DownloadArtifact(context.Background(), 9001, 10*1024*1024)
+	client := newTestClient(srv.URL)
+	fs, size, cleanup, err := client.DownloadArtifact(context.Background(), 9001, 10*1024*1024, "")
 
 	require.NoError(t, err)
 	require.NotNil(t, fs)
 	require.GreaterOrEqual(t, size, int64(0))
+	require.NotNil(t, cleanup)
+	defer cleanup()
 
 	// verify the extracted content
 	f, err := fs.Open("index.html")

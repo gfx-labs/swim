@@ -12,25 +12,25 @@ import (
 func TestMetadataCacheGetSet(t *testing.T) {
 	tests := []struct {
 		name       string
-		pr         int
+		key        string
 		artifactID int64
 		etag       string
 	}{
 		{
 			name:       "simple pr",
-			pr:         42,
+			key:        "pr:42",
 			artifactID: 100,
 			etag:       "abc123",
 		},
 		{
 			name:       "large pr number",
-			pr:         123,
+			key:        "pr:123",
 			artifactID: 200,
 			etag:       "def456",
 		},
 		{
 			name:       "empty etag",
-			pr:         7,
+			key:        "pr:7",
 			artifactID: 300,
 			etag:       "",
 		},
@@ -40,13 +40,13 @@ func TestMetadataCacheGetSet(t *testing.T) {
 			c := newMetadataCache(time.Hour)
 
 			// miss before set
-			entry, fresh := c.get(tt.pr)
+			entry, fresh := c.get(tt.key)
 			require.Nil(t, entry)
 			require.False(t, fresh)
 
-			c.set(tt.pr, tt.artifactID, tt.etag)
+			c.set(tt.key, tt.artifactID, tt.etag)
 
-			entry, fresh = c.get(tt.pr)
+			entry, fresh = c.get(tt.key)
 			require.NotNil(t, entry)
 			require.True(t, fresh)
 			require.Equal(t, tt.artifactID, entry.artifactID)
@@ -59,10 +59,10 @@ func TestMetadataCacheTTL(t *testing.T) {
 	ttl := 10 * time.Millisecond
 	c := newMetadataCache(ttl)
 
-	c.set(42, 1, "etag1")
+	c.set("pr:42", 1, "etag1")
 
 	// fresh immediately
-	entry, fresh := c.get(42)
+	entry, fresh := c.get("pr:42")
 	require.NotNil(t, entry)
 	require.True(t, fresh)
 
@@ -70,7 +70,7 @@ func TestMetadataCacheTTL(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// stale after TTL but entry still returned
-	entry, fresh = c.get(42)
+	entry, fresh = c.get("pr:42")
 	require.NotNil(t, entry, "entry should still be returned even when stale")
 	require.False(t, fresh, "entry should be stale after TTL")
 	require.Equal(t, int64(1), entry.artifactID)
@@ -79,28 +79,28 @@ func TestMetadataCacheTTL(t *testing.T) {
 func TestMetadataCacheEvict(t *testing.T) {
 	tests := []struct {
 		name   string
-		prs    []int
-		evict  int
+		keys   []string
+		evict  string
 		wantOk bool
 	}{
 		{
 			name:   "evict existing entry",
-			prs:    []int{42, 123},
-			evict:  42,
+			keys:   []string{"pr:42", "pr:123"},
+			evict:  "pr:42",
 			wantOk: true,
 		},
 		{
 			name:   "evict nonexistent entry",
-			prs:    []int{42},
-			evict:  999,
+			keys:   []string{"pr:42"},
+			evict:  "pr:999",
 			wantOk: false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newMetadataCache(time.Hour)
-			for i, pr := range tt.prs {
-				c.set(pr, int64(i), "etag")
+			for i, key := range tt.keys {
+				c.set(key, int64(i), "etag")
 			}
 
 			ok := c.evict(tt.evict)
@@ -114,21 +114,21 @@ func TestMetadataCacheEvict(t *testing.T) {
 
 func TestMetadataCacheSnapshot(t *testing.T) {
 	c := newMetadataCache(time.Hour)
-	c.set(42, 1, "etag1")
-	c.set(123, 2, "etag2")
+	c.set("pr:42", 1, "etag1")
+	c.set("pr:123", 2, "etag2")
 
 	snap := c.snapshot()
 	require.Len(t, snap, 2)
-	require.Equal(t, int64(1), snap[42].artifactID)
-	require.Equal(t, int64(2), snap[123].artifactID)
+	require.Equal(t, int64(1), snap["pr:42"].artifactID)
+	require.Equal(t, int64(2), snap["pr:123"].artifactID)
 
 	// mutating the snapshot should not affect the cache
-	snap[42].etag = "mutated"
-	original, _ := c.get(42)
+	snap["pr:42"].etag = "mutated"
+	original, _ := c.get("pr:42")
 	require.Equal(t, "etag1", original.etag, "snapshot mutation must not affect cache")
 
 	// adding to the snapshot should not affect the cache
-	snap[999] = &metadataEntry{}
+	snap["pr:999"] = &metadataEntry{}
 	snap2 := c.snapshot()
 	require.Len(t, snap2, 2)
 }
@@ -160,7 +160,7 @@ func TestArtifactCacheGetSet(t *testing.T) {
 			require.Nil(t, fs)
 			require.False(t, ok)
 
-			c.set(tt.artifactID, memfs, tt.sizeBytes)
+			c.set(tt.artifactID, memfs, tt.sizeBytes, nil)
 
 			fs, ok = c.get(tt.artifactID)
 			require.NotNil(t, fs)
@@ -176,10 +176,10 @@ func TestArtifactCacheLRU(t *testing.T) {
 	fs2 := afero.NewMemMapFs()
 	fs3 := afero.NewMemMapFs()
 
-	c.set(1, fs1, 100)
+	c.set(1, fs1, 100, nil)
 	// small gap so lastAccess ordering is deterministic
 	time.Sleep(time.Millisecond)
-	c.set(2, fs2, 200)
+	c.set(2, fs2, 200, nil)
 
 	// both present
 	_, ok := c.get(1)
@@ -193,7 +193,7 @@ func TestArtifactCacheLRU(t *testing.T) {
 	require.True(t, ok)
 
 	// inserting 3 should evict 2 (the least recently accessed)
-	c.set(3, fs3, 300)
+	c.set(3, fs3, 300, nil)
 
 	_, ok = c.get(1)
 	require.True(t, ok, "artifact 1 should survive (recently accessed)")
@@ -229,7 +229,7 @@ func TestArtifactCacheEvict(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newArtifactCache(10)
 			for _, id := range tt.ids {
-				c.set(id, afero.NewMemMapFs(), 100)
+				c.set(id, afero.NewMemMapFs(), 100, nil)
 			}
 
 			ok := c.evict(tt.evict)
@@ -250,9 +250,9 @@ func TestArtifactCacheStats(t *testing.T) {
 	require.Equal(t, 0, count)
 	require.Equal(t, int64(0), totalBytes)
 
-	c.set(1, afero.NewMemMapFs(), 100)
-	c.set(2, afero.NewMemMapFs(), 250)
-	c.set(3, afero.NewMemMapFs(), 650)
+	c.set(1, afero.NewMemMapFs(), 100, nil)
+	c.set(2, afero.NewMemMapFs(), 250, nil)
+	c.set(3, afero.NewMemMapFs(), 650, nil)
 
 	count, totalBytes = c.stats()
 	require.Equal(t, 3, count)
@@ -278,13 +278,13 @@ func TestCacheConcurrency(t *testing.T) {
 	for i := 0; i < workers; i++ {
 		go func(id int) {
 			defer wg.Done()
-			pr := 42
+			key := "pr:42"
 			for j := 0; j < iterations; j++ {
-				mc.set(pr, int64(id*1000+j), "etag")
-				mc.get(pr)
+				mc.set(key, int64(id*1000+j), "etag")
+				mc.get(key)
 				mc.snapshot()
 				if j%10 == 0 {
-					mc.evict(pr)
+					mc.evict(key)
 				}
 			}
 		}(i)
@@ -298,7 +298,7 @@ func TestCacheConcurrency(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < iterations; j++ {
 				aid := int64(id*1000 + j)
-				ac.set(aid, afero.NewMemMapFs(), 64)
+				ac.set(aid, afero.NewMemMapFs(), 64, nil)
 				ac.get(aid)
 				ac.stats()
 				if j%10 == 0 {

@@ -37,7 +37,7 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 const maxHostLength = 253
 
 // default host regex: pr-{number}.{any domain}
-const defaultHostRe = `^pr-(\d+)\.(.+)$`
+const defaultHostRe = `^pr-(.+?)\.(.+)$`
 
 // fsKeyPrefix is used to namespace our entries in the global FileSystems map
 const fsKeyPrefix = "github_preview:"
@@ -76,6 +76,9 @@ type GithubPreview struct {
 	MaxArtifacts         int      `json:"max_artifacts,omitempty"`
 	MaxArtifactSize      int64    `json:"max_artifact_size,omitempty"`
 	StaleWhileRevalidate bool     `json:"stale_while_revalidate,omitempty"`
+	PruneInterval        Duration `json:"prune_interval,omitempty"`    // how often to run background pruning (default 6h)
+	MaxArtifactAge       Duration `json:"max_artifact_age,omitempty"` // evict artifacts not accessed in this long (default: disabled)
+	ReadCacheSize        int64    `json:"read_cache_size,omitempty"`  // per-artifact LRU read cache in bytes (default 10MB)
 
 	// refresh API
 	ApiPath      string `json:"api_path,omitempty"`
@@ -100,7 +103,10 @@ type GithubPreview struct {
 
 	// stale-while-revalidate background refresh tracking
 	refreshMu     sync.Mutex
-	refreshActive map[int]bool
+	refreshActive map[string]bool
+
+	// pruner shutdown
+	pruneStop chan struct{}
 }
 
 func (g *GithubPreview) CaddyModule() caddy.ModuleInfo {
@@ -170,6 +176,12 @@ func (g *GithubPreview) Provision(ctx caddy.Context) error {
 	if g.ApiPath == "" {
 		g.ApiPath = defaultApiPath
 	}
+	if time.Duration(g.PruneInterval) == 0 {
+		g.PruneInterval = Duration(defaultPruneInterval)
+	}
+	if g.ReadCacheSize == 0 {
+		g.ReadCacheSize = defaultReadCacheSize
+	}
 
 	// compile host regex
 	re, err := regexp.Compile(g.HostRe)
@@ -190,16 +202,16 @@ func (g *GithubPreview) Provision(ctx caddy.Context) error {
 
 	// initialize github client
 	g.client = newGithubClient(githubClientConfig{
-		owner:           g.owner,
-		repo:            g.repoName,
-		token:           g.Token,
-		apiURL:          g.ApiURL,
-		workflow:        g.Workflow,
-		artifactName:    g.ArtifactName,
-		artifactType:    g.ArtifactType,
-		apiTimeout:      defaultApiTimeout,
-		downloadTimeout: defaultDownloadTimeout,
-		limiter:         g.limiter,
+		owner:        g.owner,
+		repo:         g.repoName,
+		token:        g.Token,
+		apiURL:       g.ApiURL,
+		workflow:     g.Workflow,
+		artifactName: g.ArtifactName,
+		artifactType: g.ArtifactType,
+		timeout:      defaultDownloadTimeout,
+		limiter:      g.limiter,
+		log:          g.log,
 	})
 
 	// initialize templates
@@ -210,7 +222,11 @@ func (g *GithubPreview) Provision(ctx caddy.Context) error {
 	g.templates = tmpl
 
 	// stale-while-revalidate tracking
-	g.refreshActive = make(map[int]bool)
+	g.refreshActive = make(map[string]bool)
+
+	// start background pruner
+	g.pruneStop = make(chan struct{})
+	go g.runPruner()
 
 	g.log.Debug("provisioned github_preview",
 		zap.String("repo", g.Repo),
@@ -220,17 +236,23 @@ func (g *GithubPreview) Provision(ctx caddy.Context) error {
 		zap.Duration("metadata_ttl", time.Duration(g.MetadataTTL)),
 		zap.Int("max_artifacts", g.MaxArtifacts),
 		zap.Bool("stale_while_revalidate", g.StaleWhileRevalidate),
+		zap.Duration("prune_interval", time.Duration(g.PruneInterval)),
 	)
 
 	return nil
 }
 
 func (g *GithubPreview) Cleanup() error {
+	// stop the background pruner
+	close(g.pruneStop)
+
 	// unregister all our filesystems from the global map
 	entries := g.metadataCache.snapshot()
-	for pr := range entries {
-		g.fileSystems.Unregister(fsKey(pr))
+	for key := range entries {
+		g.unregisterFs(key)
 	}
+	// remove all temp files
+	g.artifactCache.cleanupAll()
 	return nil
 }
 
@@ -240,14 +262,14 @@ func (g *GithubPreview) ServeHTTP(w http.ResponseWriter, r *http.Request, next c
 		return g.handleAPI(w, r)
 	}
 
-	// extract PR number from host
-	pr, ok := g.extractPR(r)
+	// extract key from host (PR number or branch name depending on mode)
+	key, ok := g.extractKey(r)
 	if !ok {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusNotFound)
 		g.templates.renderError(w, errorData{
 			Host:  r.Host,
-			Error: "no matching pull request found in hostname",
+			Error: "no matching preview found in hostname",
 		})
 		return nil
 	}
@@ -260,34 +282,35 @@ func (g *GithubPreview) ServeHTTP(w http.ResponseWriter, r *http.Request, next c
 			})
 			return nil
 		}
-		return g.handleDebug(w, r, pr)
+		return g.handleDebug(w, r, key)
 	}
 
-	// resolve PR to artifact filesystem and register it
-	key, err := g.resolveAndRegister(r.Context(), pr)
+	// resolve to artifact filesystem and register it
+	fsName, err := g.resolveAndRegister(r.Context(), key)
 	if err != nil {
 		g.log.Debug("failed to resolve artifact",
-			zap.Int("pr", pr),
+			zap.String("key", key),
 			zap.Error(err),
 		)
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusNotFound)
 		g.templates.renderError(w, errorData{
-			PR:    pr,
+			Host:  r.Host,
 			Error: err.Error(),
 		})
 		return nil
 	}
 
 	// set the filesystem variable for downstream handlers (file_server, try_files, etc.)
-	caddyhttp.SetVar(r.Context(), "fs", key)
+	caddyhttp.SetVar(r.Context(), "fs", fsName)
 
 	return next.ServeHTTP(w, r)
 }
 
-// extractPR extracts the PR number from the request Host using host_re.
-// the first capture group of host_re must be the PR number (digits).
-func (g *GithubPreview) extractPR(r *http.Request) (int, bool) {
+// extractKey extracts the cache key from the request Host using host_re.
+// if the capture group is all digits, it's treated as a PR number ("pr:42").
+// otherwise it's treated as a branch name ("branch:master").
+func (g *GithubPreview) extractKey(r *http.Request) (string, bool) {
 	host := r.Host
 	// strip port if present
 	if idx := strings.LastIndex(host, ":"); idx != -1 {
@@ -296,155 +319,267 @@ func (g *GithubPreview) extractPR(r *http.Request) (int, bool) {
 
 	// reject hostnames exceeding DNS max length
 	if len(host) > maxHostLength {
-		return 0, false
+		return "", false
 	}
 
 	matches := g.hostRegexp.FindStringSubmatch(host)
 	if len(matches) < 2 {
-		return 0, false
+		return "", false
 	}
 
-	n, err := strconvAtoi(matches[1])
-	if err != nil {
-		return 0, false
+	captured := matches[1]
+	if captured == "" {
+		return "", false
 	}
 
-	return n, true
+	// auto-detect: all digits = PR number, otherwise branch name
+	if _, err := strconvAtoi(captured); err == nil {
+		return "pr:" + captured, true
+	}
+	return "branch:" + captured, true
 }
 
-// resolveAndRegister resolves a PR to an artifact filesystem, registers it
-// in the global FileSystems map, and returns the key.
-func (g *GithubPreview) resolveAndRegister(ctx context.Context, pr int) (string, error) {
-	key := fsKey(pr)
+// resolveAndRegister resolves a key to an artifact filesystem, registers it
+// in the global FileSystems map, and returns the fs registration key.
+func (g *GithubPreview) resolveAndRegister(ctx context.Context, key string) (string, error) {
+	regKey := fsKeyPrefix + key
 
 	// check metadata cache
-	meta, fresh := g.metadataCache.get(pr)
+	meta, fresh := g.metadataCache.get(key)
 
 	if meta != nil && fresh {
-		// cache hit + fresh -- check that the artifact is still in cache and registered
 		if _, ok := g.artifactCache.get(meta.artifactID); ok {
-			return key, nil
+			return regKey, nil
 		}
-		// artifact evicted from LRU, re-download
-		_, err := g.downloadAndCache(ctx, pr, meta.artifactID)
+		_, err := g.downloadAndCache(ctx, key, meta.artifactID, "")
 		if err != nil {
 			return "", err
 		}
-		return key, nil
+		return regKey, nil
 	}
 
 	if meta != nil && !fresh && g.StaleWhileRevalidate {
-		// cache hit + stale + stale-while-revalidate enabled
 		if _, ok := g.artifactCache.get(meta.artifactID); ok {
-			g.triggerBackgroundRefresh(pr)
-			return key, nil
+			g.triggerBackgroundRefresh(key)
+			return regKey, nil
 		}
 	}
 
 	// cache miss or stale without SWR -- full resolve through singleflight
-	sfKey := fmt.Sprintf("resolve:%d", pr)
-	_, err, _ := g.singleflight.Do(sfKey, func() (any, error) {
-		_, err := g.fullResolve(ctx, pr)
+	_, err, _ := g.singleflight.Do("resolve:"+key, func() (any, error) {
+		_, err := g.fullResolve(ctx, key)
 		return nil, err
 	})
 	if err != nil {
 		return "", err
 	}
-	return key, nil
+	return regKey, nil
 }
 
-// fullResolve does the complete GitHub API -> download -> cache pipeline
-func (g *GithubPreview) fullResolve(ctx context.Context, pr int) (afero.Fs, error) {
-	res, err := g.client.ResolvePR(ctx, pr)
-	if err != nil {
-		return nil, err
+// fullResolve does the complete GitHub API -> download -> cache pipeline.
+// auto-detects PR vs branch based on the key prefix.
+func (g *GithubPreview) fullResolve(ctx context.Context, key string) (afero.Fs, error) {
+	var digest string
+	var artifactID int64
+
+	if strings.HasPrefix(key, "branch:") {
+		branchName := strings.TrimPrefix(key, "branch:")
+
+		run, err := g.client.findWorkflowRun(ctx, branchName)
+		if err != nil {
+			return nil, fmt.Errorf("find workflow run for branch %s: %w", branchName, err)
+		}
+		artifact, err := g.client.findArtifact(ctx, run.ID)
+		if err != nil {
+			return nil, fmt.Errorf("find artifact in run %d: %w", run.ID, err)
+		}
+		artifactID = artifact.ID
+		digest = artifact.Digest
+	} else {
+		prStr := strings.TrimPrefix(key, "pr:")
+		prNum, err := strconvAtoi(prStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid PR number: %s", prStr)
+		}
+
+		res, err := g.client.ResolvePR(ctx, prNum)
+		if err != nil {
+			return nil, err
+		}
+
+		// on-demand closed PR detection
+		if res.PR.State != "open" {
+			g.evictKey(key)
+			return nil, fmt.Errorf("PR #%d is %s", prNum, res.PR.State)
+		}
+
+		artifactID = res.ArtifactID
+		digest = res.Artifact.Digest
 	}
 
 	// check if we already have this artifact cached
-	if fs, ok := g.artifactCache.get(res.ArtifactID); ok {
-		g.metadataCache.set(pr, res.ArtifactID, "")
-		// ensure registered
-		g.registerFs(pr, fs)
+	if fs, ok := g.artifactCache.get(artifactID); ok {
+		g.metadataCache.set(key, artifactID, "")
+		g.registerFs(key, fs)
 		return fs, nil
 	}
 
-	return g.downloadAndCache(ctx, pr, res.ArtifactID)
+	return g.downloadAndCache(ctx, key, artifactID, digest)
 }
 
 // downloadAndCache downloads an artifact and puts it in both caches,
 // then registers the filesystem in the global map
-func (g *GithubPreview) downloadAndCache(ctx context.Context, pr int, artifactID int64) (afero.Fs, error) {
-	rawFs, size, err := g.client.DownloadArtifact(ctx, artifactID, g.MaxArtifactSize)
+func (g *GithubPreview) downloadAndCache(ctx context.Context, key string, artifactID int64, expectedDigest string) (afero.Fs, error) {
+	rawFs, size, cleanup, err := g.client.DownloadArtifact(ctx, artifactID, g.MaxArtifactSize, expectedDigest)
 	if err != nil {
 		return nil, err
 	}
 
-	// apply workdir + caching layers (same pattern as VFS)
 	wd := g.WorkDir
 	if wd == "" {
 		wd = "/"
 	}
 	layered := afero.NewBasePathFs(rawFs, wd)
-	layered = afero.NewReadOnlyFs(afero.NewCacheOnReadFs(layered, afero.NewMemMapFs(), 0))
+	layered = newLruCacheFs(layered, g.ReadCacheSize)
 
-	g.artifactCache.set(artifactID, layered, size)
-	g.metadataCache.set(pr, artifactID, "")
-	g.registerFs(pr, layered)
+	g.artifactCache.set(artifactID, layered, size, cleanup)
+	g.metadataCache.set(key, artifactID, "")
+	g.registerFs(key, layered)
 
 	return layered, nil
 }
 
 // registerFs registers an afero.Fs in Caddy's global FileSystems map
-func (g *GithubPreview) registerFs(pr int, afs afero.Fs) {
+func (g *GithubPreview) registerFs(key string, afs afero.Fs) {
 	if g.fileSystems != nil {
-		g.fileSystems.Register(fsKey(pr), afero.NewIOFS(afs))
+		g.fileSystems.Register(fsKeyPrefix+key, afero.NewIOFS(afs))
 	}
 }
 
 // unregisterFs removes a filesystem from Caddy's global FileSystems map
-func (g *GithubPreview) unregisterFs(pr int) {
+func (g *GithubPreview) unregisterFs(key string) {
 	if g.fileSystems != nil {
-		g.fileSystems.Unregister(fsKey(pr))
+		g.fileSystems.Unregister(fsKeyPrefix + key)
 	}
 }
 
-// fsKey returns the global FileSystems map key for a PR
-func fsKey(pr int) string {
-	return fmt.Sprintf("%s%d", fsKeyPrefix, pr)
-}
-
-// triggerBackgroundRefresh starts an async re-resolve for a PR if one isn't already running
-func (g *GithubPreview) triggerBackgroundRefresh(pr int) {
+// triggerBackgroundRefresh starts an async re-resolve if one isn't already running
+func (g *GithubPreview) triggerBackgroundRefresh(key string) {
 	g.refreshMu.Lock()
-	if g.refreshActive[pr] {
+	if g.refreshActive[key] {
 		g.refreshMu.Unlock()
 		return
 	}
-	g.refreshActive[pr] = true
+	g.refreshActive[key] = true
 	g.refreshMu.Unlock()
 
 	go func() {
 		defer func() {
 			g.refreshMu.Lock()
-			delete(g.refreshActive, pr)
+			delete(g.refreshActive, key)
 			g.refreshMu.Unlock()
 		}()
 
 		ctx, cancel := context.WithTimeout(context.Background(), defaultDownloadTimeout)
 		defer cancel()
 
-		_, err := g.fullResolve(ctx, pr)
+		_, err := g.fullResolve(ctx, key)
 		if err != nil {
 			g.log.Debug("background refresh failed",
-				zap.Int("pr", pr),
+				zap.String("key", key),
 				zap.Error(err),
 			)
 		} else {
 			g.log.Debug("background refresh completed",
-				zap.Int("pr", pr),
+				zap.String("key", key),
 			)
 		}
 	}()
+}
+
+// runPruner periodically prunes closed PRs and (optionally) stale artifacts
+func (g *GithubPreview) runPruner() {
+	ticker := time.NewTicker(time.Duration(g.PruneInterval))
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			g.pruneOnce()
+		case <-g.pruneStop:
+			return
+		}
+	}
+}
+
+// pruneOnce runs one pruning cycle: evicts closed/merged PRs and stale artifacts
+func (g *GithubPreview) pruneOnce() {
+	g.log.Debug("starting prune cycle")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	entries := g.metadataCache.snapshot()
+
+	// prune closed/merged PRs (skip branch entries)
+	for key, meta := range entries {
+		if !strings.HasPrefix(key, "pr:") {
+			continue
+		}
+		prStr := strings.TrimPrefix(key, "pr:")
+		prNum, err := strconvAtoi(prStr)
+		if err != nil {
+			continue
+		}
+		state, err := g.client.GetPRState(ctx, prNum)
+		if err != nil {
+			g.log.Debug("prune: failed to check PR state",
+				zap.String("key", key),
+				zap.Error(err),
+			)
+			continue
+		}
+		if state != "open" {
+			g.log.Debug("prune: evicting closed PR",
+				zap.String("key", key),
+				zap.String("state", state),
+			)
+			g.artifactCache.evict(meta.artifactID)
+			g.metadataCache.evict(key)
+			g.unregisterFs(key)
+		}
+	}
+
+	// prune by age (if configured)
+	maxAge := time.Duration(g.MaxArtifactAge)
+	if maxAge > 0 {
+		stale := g.artifactCache.staleEntries(maxAge)
+		for _, artifactID := range stale {
+			g.log.Debug("prune: evicting stale artifact",
+				zap.Int64("artifact_id", artifactID),
+			)
+			g.artifactCache.evict(artifactID)
+			// also clean up metadata entries pointing to this artifact
+			for key, meta := range entries {
+				if meta.artifactID == artifactID {
+					g.metadataCache.evict(key)
+					g.unregisterFs(key)
+				}
+			}
+		}
+	}
+
+	g.log.Debug("prune cycle complete")
+}
+
+// evictKey is used for on-demand eviction
+func (g *GithubPreview) evictKey(key string) {
+	meta, _ := g.metadataCache.get(key)
+	if meta != nil {
+		g.artifactCache.evict(meta.artifactID)
+	}
+	g.metadataCache.evict(key)
+	g.unregisterFs(key)
 }
 
 // interface assertion
