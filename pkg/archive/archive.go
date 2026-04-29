@@ -1,4 +1,4 @@
-package vfs
+package archive
 
 import (
 	"archive/tar"
@@ -14,7 +14,7 @@ import (
 	"github.com/spf13/afero/zipfs"
 )
 
-func filetypeFromName(filename string) (guess string) {
+func FiletypeFromName(filename string) (guess string) {
 	switch {
 	case strings.HasSuffix(filename, ".zip"):
 		return ".zip"
@@ -26,7 +26,7 @@ func filetypeFromName(filename string) (guess string) {
 	return ".tar"
 }
 
-func filesystemFromReader(ft string, r io.Reader) (rootFs afero.Fs, err error) {
+func FilesystemFromReader(ft string, r io.Reader) (rootFs afero.Fs, err error) {
 	body, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
