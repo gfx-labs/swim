@@ -87,107 +87,26 @@ this does prerender middleware, so it has the list of user agents, and do like p
 github.com/gfx-labs/swim/plugin/github_preview
 ```
 
-github_preview is a middleware that serves GitHub Actions build artifacts for pull request preview deploys. it extracts a PR number from the request hostname, resolves the latest successful build artifact via the GitHub API, and registers the artifact as a caddy filesystem. downstream handlers (`file_server`, `try_files`, etc.) serve from it natively.
+github_preview is a middleware that dynamically serves GitHub Actions build artifacts. it extracts a PR number or branch name from the request hostname, resolves the latest successful build artifact, and registers it as a caddy filesystem for `file_server` and `try_files` to serve from.
 
-a single swim instance serves all PR previews with no config changes or restarts when PRs are opened or closed. artifacts are cached in memory with configurable TTL and LRU eviction.
+artifacts are cached on disk (zip served via random access) with an in-memory LRU read cache for hot files. closed PRs are pruned automatically.
 
-**note:** github_preview sets the `{http.vars.fs}` request variable to point at the resolved artifact filesystem. this overrides any `fs` directive in the same site block. if the request hostname doesn't match a PR (regex doesn't match), a 404 error page is returned -- it does not fall back to local disk.
-
-### token permissions
-
-the github token requires the following permissions:
-
-- **fine-grained PAT or GitHub App**: Actions (read), Pull requests (read)
-- **classic PAT**: `repo` scope
-
-### example
+the github token needs Actions (read) + Pull requests (read) permissions (fine-grained PAT), or `repo` scope (classic PAT).
 
 ```
 *.preview.oku.trade {
-    route /config.js {
-        respond `window.Config = { api: "https://api.staging.oku.trade" }`
-    }
     github_preview {
         repo "oku-trade/trade"
         token {env.GITHUB_TOKEN}
         workflow "ci.yml"
         artifact_name "build-artifacts"
         workdir "dist"
-        api_key {env.PREVIEW_API_KEY}
     }
     try_files {path} /index.html
-    @no_cache path */sw.js */index.html
-    header @no_cache Cache-Control "no-cache, must-revalidate, max-age=0"
-    header Cache-Control "max-age=3600"
     file_server
 }
 ```
 
-### configuration
+the `host_re` regex (default `^pr-(.+?)\.(.+)$`) extracts the key from the hostname. if the captured value is all digits it resolves as a PR number, otherwise as a branch name. `pr-42.preview.oku.trade` resolves PR #42, `pr-master.preview.oku.trade` resolves the `master` branch.
 
-| option | default | description |
-|---|---|---|
-| `repo` | (required) | github repo in `owner/repo` format |
-| `token` | (required) | github API token |
-| `workflow` | (none) | filter workflow runs by file name (e.g. `build.yml`) |
-| `artifact_name` | `dist` | artifact name from `actions/upload-artifact` |
-| `artifact_type` | `.zip` | archive format (`.zip`, `.tar.gz`, `.tar`) |
-| `workdir` | `/` | subdirectory within the archive to serve from |
-| `host_re` | `^pr-(\d+)\.(.+)$` | regex to extract PR number from hostname (capture group 1) |
-| `api_url` | `https://api.github.com` | github API base URL (for GitHub Enterprise) |
-| `metadata_ttl` | `120s` | how long to cache PR -> artifact ID mappings |
-| `max_artifacts` | `50` | max cached artifact filesystems (LRU eviction) |
-| `max_artifact_size` | `100MB` | max artifact download size |
-| `stale_while_revalidate` | `false` | serve stale cache while refreshing in background |
-| `api_path` | `/.well-known/github-preview` | path prefix for the management API |
-| `api_key` | (none) | API key for the management API (`X-Api-Key` header) |
-| `error_template` | (built-in) | inline HTML template for error pages |
-| `error_template_file` | (none) | path to a custom error template file |
-
-### management API
-
-all endpoints require `X-Api-Key: <api_key>` header.
-
-**POST `/.well-known/github-preview/refresh`** -- resolve and cache an artifact for a PR. optionally provide an `artifact_id` hint from CI.
-
-```json
-{"pr": 42, "artifact_id": 12345}
-```
-
-**DELETE `/.well-known/github-preview/refresh`** -- evict a PR from the cache.
-
-```json
-{"pr": 42}
-```
-
-**GET `/.well-known/github-preview/status`** -- list all cached PRs and cache stats.
-
-### debug endpoint
-
-every preview gets a debug page at `/.well-known/deployment-debug` (requires refresh token). it shows cache state and live GitHub API data for the PR derived from the hostname.
-
-### CI integration
-
-in the GitHub Actions workflow, after uploading the build artifact:
-
-```yaml
-- name: Notify preview server
-  run: |
-    ARTIFACT_ID=$(gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts \
-      --jq '.artifacts[] | select(.name=="dist") | .id')
-    curl -X POST https://preview.oku.trade/.well-known/github-preview/refresh \
-      -H "X-Api-Key: ${{ secrets.PREVIEW_API_KEY }}" \
-      -H "Content-Type: application/json" \
-      -d "{\"pr\": ${{ github.event.pull_request.number }}, \"artifact_id\": ${ARTIFACT_ID}}"
-```
-
-on PR close:
-
-```yaml
-- name: Evict preview cache
-  run: |
-    curl -X DELETE https://preview.oku.trade/.well-known/github-preview/refresh \
-      -H "X-Api-Key: ${{ secrets.PREVIEW_API_KEY }}" \
-      -H "Content-Type: application/json" \
-      -d "{\"pr\": ${{ github.event.pull_request.number }}}"
-```
+a management API is available at `/.well-known/github-preview/` (protected by `api_key` via `X-Api-Key` header): POST `/refresh` to warm the cache, DELETE `/refresh` to evict, GET `/status` to list cached entries. a public debug endpoint at `/.well-known/deployment-debug` shows cache state for the current hostname.
