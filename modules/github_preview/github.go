@@ -153,7 +153,7 @@ func (c *GithubClient) resolveArtifact(ctx context.Context, branch string) (*ghW
 	)
 
 	// use the workflow-specific runs endpoint to filter server-side
-	runsURL := fmt.Sprintf("%s/repos/%s/%s/actions/workflows/%s/runs?branch=%s&per_page=5",
+	runsURL := fmt.Sprintf("%s/repos/%s/%s/actions/workflows/%s/runs?branch=%s&per_page=30",
 		c.apiURL, c.owner, c.repo, url.PathEscape(c.workflow), url.QueryEscape(branch))
 
 	var runsResp struct {
