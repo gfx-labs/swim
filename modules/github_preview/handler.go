@@ -62,7 +62,7 @@ type GithubPreview struct {
 	// For public repos, requests work without a token but are limited to
 	// 60 requests/hour. Authenticated requests get 5,000 requests/hour.
 	Token string `json:"token"`
-	Workflow     string `json:"workflow,omitempty"`
+	Workflow     string `json:"workflow"`
 	ArtifactName string `json:"artifact_name,omitempty"`
 	ArtifactType string `json:"artifact_type,omitempty"`
 	WorkDir      string `json:"workdir,omitempty"`
@@ -140,6 +140,10 @@ func (g *GithubPreview) Provision(ctx caddy.Context) error {
 	}
 	g.owner = parts[0]
 	g.repoName = parts[1]
+
+	if g.Workflow == "" {
+		return fmt.Errorf("github_preview: workflow is required")
+	}
 
 	if g.Token == "" {
 		g.log.Warn("github_preview: no token configured, API calls will be unauthenticated")
@@ -231,7 +235,6 @@ func (g *GithubPreview) Provision(ctx caddy.Context) error {
 
 	g.log.Debug("provisioned github_preview",
 		zap.String("repo", g.Repo),
-		zap.String("workflow", g.Workflow),
 		zap.String("artifact_name", g.ArtifactName),
 		zap.String("host_re", g.HostRe),
 		zap.Duration("metadata_ttl", time.Duration(g.MetadataTTL)),
@@ -351,7 +354,7 @@ func (g *GithubPreview) resolveAndRegister(ctx context.Context, key string) (str
 		if _, ok := g.artifactCache.get(meta.artifactID); ok {
 			return regKey, nil
 		}
-		_, err := g.downloadAndCache(ctx, key, meta.artifactID, "")
+		_, err := g.downloadAndCache(ctx, key, meta.artifactID, "", meta.headSHA)
 		if err != nil {
 			return "", err
 		}
@@ -388,20 +391,18 @@ func (g *GithubPreview) resolveAndRegister(ctx context.Context, key string) (str
 func (g *GithubPreview) fullResolve(ctx context.Context, key string) (afero.Fs, error) {
 	var digest string
 	var artifactID int64
+	var headSHA string
 
 	if strings.HasPrefix(key, "branch:") {
 		branchName := strings.TrimPrefix(key, "branch:")
 
-		run, err := g.client.findWorkflowRun(ctx, branchName)
+		run, artifact, err := g.client.resolveArtifact(ctx, branchName)
 		if err != nil {
-			return nil, fmt.Errorf("find workflow run for branch %s: %w", branchName, err)
-		}
-		artifact, err := g.client.findArtifact(ctx, run.ID)
-		if err != nil {
-			return nil, fmt.Errorf("find artifact in run %d: %w", run.ID, err)
+			return nil, err
 		}
 		artifactID = artifact.ID
 		digest = artifact.Digest
+		headSHA = run.HeadSHA
 	} else {
 		prStr := strings.TrimPrefix(key, "pr:")
 		prNum, err := strconvAtoi(prStr)
@@ -422,21 +423,22 @@ func (g *GithubPreview) fullResolve(ctx context.Context, key string) (afero.Fs, 
 
 		artifactID = res.ArtifactID
 		digest = res.Artifact.Digest
+		headSHA = res.WorkflowRun.HeadSHA
 	}
 
 	// check if we already have this artifact cached
 	if fs, ok := g.artifactCache.get(artifactID); ok {
-		g.metadataCache.set(key, artifactID, "")
+		g.metadataCache.set(key, artifactID, headSHA)
 		g.registerFs(key, fs)
 		return fs, nil
 	}
 
-	return g.downloadAndCache(ctx, key, artifactID, digest)
+	return g.downloadAndCache(ctx, key, artifactID, digest, headSHA)
 }
 
 // downloadAndCache downloads an artifact and puts it in both caches,
 // then registers the filesystem in the global map
-func (g *GithubPreview) downloadAndCache(ctx context.Context, key string, artifactID int64, expectedDigest string) (afero.Fs, error) {
+func (g *GithubPreview) downloadAndCache(ctx context.Context, key string, artifactID int64, expectedDigest string, headSHA string) (afero.Fs, error) {
 	rawFs, size, cleanup, err := g.client.DownloadArtifact(ctx, artifactID, g.MaxArtifactSize, expectedDigest)
 	if err != nil {
 		return nil, err
@@ -450,7 +452,7 @@ func (g *GithubPreview) downloadAndCache(ctx context.Context, key string, artifa
 	layered = newLruCacheFs(layered, g.ReadCacheSize)
 
 	g.artifactCache.set(artifactID, layered, size, cleanup)
-	g.metadataCache.set(key, artifactID, "")
+	g.metadataCache.set(key, artifactID, headSHA)
 	g.registerFs(key, layered)
 
 	return layered, nil

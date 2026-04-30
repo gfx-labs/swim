@@ -87,7 +87,7 @@ this does prerender middleware, so it has the list of user agents, and do like p
 github.com/gfx-labs/swim/plugin/github_preview
 ```
 
-github_preview is a middleware that dynamically serves GitHub Actions build artifacts. it extracts a PR number or branch name from the request hostname, resolves the latest successful build artifact, and registers it as a caddy filesystem for `file_server` and `try_files` to serve from.
+github_preview is a middleware that dynamically serves GitHub Actions build artifacts. it extracts a PR number or branch name from the request hostname, finds the latest artifact by name, and registers it as a caddy filesystem for `file_server` and `try_files` to serve from. works as soon as the build step uploads the artifact, even while the workflow is still running.
 
 artifacts are cached on disk (zip served via random access) with an in-memory LRU read cache for hot files. closed PRs are pruned automatically.
 
@@ -98,7 +98,6 @@ the github token needs Actions (read) + Pull requests (read) permissions (fine-g
     github_preview {
         repo "oku-trade/trade"
         token {env.GITHUB_TOKEN}
-        workflow "ci.yml"
         artifact_name "build-artifacts"
         workdir "dist"
     }

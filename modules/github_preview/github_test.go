@@ -22,7 +22,6 @@ func newTestClient(url string, opts ...func(*githubClientConfig)) *GithubClient 
 		repo:         "testrepo",
 		token:        "test-token",
 		apiURL:       url,
-		workflow:     "build.yml",
 		artifactName: "site",
 		artifactType: ".zip",
 		timeout:      5 * time.Second,
@@ -100,168 +99,67 @@ func TestGetPR(t *testing.T) {
 	}
 }
 
-func TestFindWorkflowRun(t *testing.T) {
-	tests := []struct {
-		name     string
-		workflow string
-		response ghWorkflowRunsResponse
-		wantErr  string
-		wantID   int64
-	}{
-		{
-			name:     "matches workflow by suffix",
-			workflow: "build.yml",
-			response: ghWorkflowRunsResponse{
-				TotalCount: 2,
-				WorkflowRuns: []ghWorkflowRun{
-					{
-						ID:         100,
-						Status:     "completed",
-						Conclusion: "success",
-						HeadBranch: "feature-x",
-						HeadSHA:    "abc123",
-						Path:       ".github/workflows/test.yml",
-					},
-					{
-						ID:         101,
-						Status:     "completed",
-						Conclusion: "success",
-						HeadBranch: "feature-x",
-						HeadSHA:    "abc123",
-						Path:       ".github/workflows/build.yml",
-					},
-				},
+func TestResolveArtifact(t *testing.T) {
+	t.Run("finds artifact for branch", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/repos/testowner/testrepo/actions/runs", jsonHandler(struct {
+			WorkflowRuns []ghWorkflowRun `json:"workflow_runs"`
+		}{
+			WorkflowRuns: []ghWorkflowRun{
+				{ID: 100, HeadBranch: "my-branch", HeadSHA: "abc123"},
 			},
-			wantID: 101,
-		},
-		{
-			name:     "no workflow filter returns first run",
-			workflow: "",
-			response: ghWorkflowRunsResponse{
-				TotalCount: 1,
-				WorkflowRuns: []ghWorkflowRun{
-					{
-						ID:         200,
-						Status:     "completed",
-						Conclusion: "success",
-						HeadSHA:    "abc123",
-						Path:       ".github/workflows/deploy.yml",
-					},
-				},
+		}))
+		mux.HandleFunc("/repos/testowner/testrepo/actions/runs/100/artifacts", jsonHandler(ghArtifactsResponse{
+			TotalCount: 1,
+			Artifacts:  []ghArtifact{{ID: 501, Name: "site", Expired: false}},
+		}))
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		client := newTestClient(srv.URL)
+		run, artifact, err := client.resolveArtifact(context.Background(), "my-branch")
+		require.NoError(t, err)
+		require.Equal(t, int64(501), artifact.ID)
+		require.Equal(t, "my-branch", run.HeadBranch)
+	})
+
+	t.Run("skips run without matching artifact", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/repos/testowner/testrepo/actions/runs", jsonHandler(struct {
+			WorkflowRuns []ghWorkflowRun `json:"workflow_runs"`
+		}{
+			WorkflowRuns: []ghWorkflowRun{
+				{ID: 200, HeadBranch: "my-branch", HeadSHA: "aaa"},
+				{ID: 201, HeadBranch: "my-branch", HeadSHA: "bbb"},
 			},
-			wantID: 200,
-		},
-		{
-			name:     "no matching run",
-			workflow: "build.yml",
-			response: ghWorkflowRunsResponse{
-				TotalCount: 1,
-				WorkflowRuns: []ghWorkflowRun{
-					{
-						ID:      300,
-						HeadSHA: "abc123",
-						Path:    ".github/workflows/lint.yml",
-					},
-				},
-			},
-			wantErr: "no successful workflow run found for branch feature-xyz with workflow 'build.yml'",
-		},
-		{
-			name:     "empty runs list",
-			workflow: "",
-			response: ghWorkflowRunsResponse{
-				TotalCount:   0,
-				WorkflowRuns: []ghWorkflowRun{},
-			},
-			wantErr: "no successful workflow run found for branch feature-xyz",
-		},
-	}
+		}))
+		mux.HandleFunc("/repos/testowner/testrepo/actions/runs/200/artifacts", jsonHandler(ghArtifactsResponse{
+			Artifacts: []ghArtifact{{ID: 600, Name: "site", Expired: true}},
+		}))
+		mux.HandleFunc("/repos/testowner/testrepo/actions/runs/201/artifacts", jsonHandler(ghArtifactsResponse{
+			Artifacts: []ghArtifact{{ID: 601, Name: "site", Expired: false}},
+		}))
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				require.Contains(t, r.URL.Path, "/repos/testowner/testrepo/actions/runs")
-				require.Equal(t, "feature-xyz", r.URL.Query().Get("branch"))
-				jsonHandler(tt.response)(w, r)
-			}))
-			defer srv.Close()
+		client := newTestClient(srv.URL)
+		_, artifact, err := client.resolveArtifact(context.Background(), "my-branch")
+		require.NoError(t, err)
+		require.Equal(t, int64(601), artifact.ID)
+	})
 
-			client := newTestClient(srv.URL, func(cfg *githubClientConfig) {
-				cfg.workflow = tt.workflow
-			})
-			run, err := client.findWorkflowRun(context.Background(), "feature-xyz")
+	t.Run("no runs for branch", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/repos/testowner/testrepo/actions/runs", jsonHandler(struct {
+			WorkflowRuns []ghWorkflowRun `json:"workflow_runs"`
+		}{WorkflowRuns: []ghWorkflowRun{}}))
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
 
-			if tt.wantErr != "" {
-				require.EqualError(t, err, tt.wantErr)
-				require.Nil(t, run)
-			} else {
-				require.NoError(t, err)
-				require.Equal(t, tt.wantID, run.ID)
-			}
-		})
-	}
-}
-
-func TestFindArtifact(t *testing.T) {
-	tests := []struct {
-		name     string
-		response ghArtifactsResponse
-		wantErr  string
-		wantID   int64
-	}{
-		{
-			name: "finds matching artifact",
-			response: ghArtifactsResponse{
-				TotalCount: 2,
-				Artifacts: []ghArtifact{
-					{ID: 500, Name: "logs", Expired: false},
-					{ID: 501, Name: "site", Expired: false, ArchiveDownloadURL: "https://example.com/dl"},
-				},
-			},
-			wantID: 501,
-		},
-		{
-			name: "expired artifact skipped",
-			response: ghArtifactsResponse{
-				TotalCount: 1,
-				Artifacts: []ghArtifact{
-					{ID: 600, Name: "site", Expired: true},
-				},
-			},
-			wantErr: "no artifact named 'site' found in run 101",
-		},
-		{
-			name: "no matching name",
-			response: ghArtifactsResponse{
-				TotalCount: 1,
-				Artifacts: []ghArtifact{
-					{ID: 700, Name: "other-artifact", Expired: false},
-				},
-			},
-			wantErr: "no artifact named 'site' found in run 101",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				require.Contains(t, r.URL.Path, "/repos/testowner/testrepo/actions/runs/101/artifacts")
-				jsonHandler(tt.response)(w, r)
-			}))
-			defer srv.Close()
-
-			client := newTestClient(srv.URL)
-			artifact, err := client.findArtifact(context.Background(), 101)
-
-			if tt.wantErr != "" {
-				require.EqualError(t, err, tt.wantErr)
-				require.Nil(t, artifact)
-			} else {
-				require.NoError(t, err)
-				require.Equal(t, tt.wantID, artifact.ID)
-			}
-		})
-	}
+		client := newTestClient(srv.URL)
+		_, _, err := client.resolveArtifact(context.Background(), "my-branch")
+		require.EqualError(t, err, "no artifact 'site' found for branch my-branch")
+	})
 }
 
 func TestResolvePR(t *testing.T) {
@@ -277,29 +175,18 @@ func TestResolvePR(t *testing.T) {
 		}{SHA: "deadbeef", Ref: "my-branch"},
 	}))
 
-	mux.HandleFunc("/repos/testowner/testrepo/actions/runs", jsonHandler(ghWorkflowRunsResponse{
-		TotalCount: 1,
+	mux.HandleFunc("/repos/testowner/testrepo/actions/runs", jsonHandler(struct {
+		WorkflowRuns []ghWorkflowRun `json:"workflow_runs"`
+	}{
 		WorkflowRuns: []ghWorkflowRun{
-			{
-				ID:         1001,
-				Status:     "completed",
-				Conclusion: "success",
-				HeadBranch: "my-branch",
-				HeadSHA:    "deadbeef",
-				Path:       ".github/workflows/build.yml",
-			},
+			{ID: 1001, HeadBranch: "my-branch", HeadSHA: "deadbeef"},
 		},
 	}))
 
 	mux.HandleFunc("/repos/testowner/testrepo/actions/runs/1001/artifacts", jsonHandler(ghArtifactsResponse{
 		TotalCount: 1,
 		Artifacts: []ghArtifact{
-			{
-				ID:                 2001,
-				Name:               "site",
-				Expired:            false,
-				ArchiveDownloadURL: "https://example.com/download",
-			},
+			{ID: 2001, Name: "site", Expired: false},
 		},
 	}))
 

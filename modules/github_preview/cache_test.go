@@ -14,25 +14,25 @@ func TestMetadataCacheGetSet(t *testing.T) {
 		name       string
 		key        string
 		artifactID int64
-		etag       string
+		headSHA    string
 	}{
 		{
 			name:       "simple pr",
 			key:        "pr:42",
 			artifactID: 100,
-			etag:       "abc123",
+			headSHA:    "abc123",
 		},
 		{
 			name:       "large pr number",
 			key:        "pr:123",
 			artifactID: 200,
-			etag:       "def456",
+			headSHA:    "def456",
 		},
 		{
-			name:       "empty etag",
+			name:       "empty headSHA",
 			key:        "pr:7",
 			artifactID: 300,
-			etag:       "",
+			headSHA:    "",
 		},
 	}
 	for _, tt := range tests {
@@ -44,13 +44,13 @@ func TestMetadataCacheGetSet(t *testing.T) {
 			require.Nil(t, entry)
 			require.False(t, fresh)
 
-			c.set(tt.key, tt.artifactID, tt.etag)
+			c.set(tt.key, tt.artifactID, tt.headSHA)
 
 			entry, fresh = c.get(tt.key)
 			require.NotNil(t, entry)
 			require.True(t, fresh)
 			require.Equal(t, tt.artifactID, entry.artifactID)
-			require.Equal(t, tt.etag, entry.etag)
+			require.Equal(t, tt.headSHA, entry.headSHA)
 		})
 	}
 }
@@ -59,7 +59,7 @@ func TestMetadataCacheTTL(t *testing.T) {
 	ttl := 10 * time.Millisecond
 	c := newMetadataCache(ttl)
 
-	c.set("pr:42", 1, "etag1")
+	c.set("pr:42", 1, "sha1")
 
 	// fresh immediately
 	entry, fresh := c.get("pr:42")
@@ -100,7 +100,7 @@ func TestMetadataCacheEvict(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newMetadataCache(time.Hour)
 			for i, key := range tt.keys {
-				c.set(key, int64(i), "etag")
+				c.set(key, int64(i), "sha")
 			}
 
 			ok := c.evict(tt.evict)
@@ -114,8 +114,8 @@ func TestMetadataCacheEvict(t *testing.T) {
 
 func TestMetadataCacheSnapshot(t *testing.T) {
 	c := newMetadataCache(time.Hour)
-	c.set("pr:42", 1, "etag1")
-	c.set("pr:123", 2, "etag2")
+	c.set("pr:42", 1, "sha1")
+	c.set("pr:123", 2, "sha2")
 
 	snap := c.snapshot()
 	require.Len(t, snap, 2)
@@ -123,9 +123,9 @@ func TestMetadataCacheSnapshot(t *testing.T) {
 	require.Equal(t, int64(2), snap["pr:123"].artifactID)
 
 	// mutating the snapshot should not affect the cache
-	snap["pr:42"].etag = "mutated"
+	snap["pr:42"].headSHA = "mutated"
 	original, _ := c.get("pr:42")
-	require.Equal(t, "etag1", original.etag, "snapshot mutation must not affect cache")
+	require.Equal(t, "sha1", original.headSHA, "snapshot mutation must not affect cache")
 
 	// adding to the snapshot should not affect the cache
 	snap["pr:999"] = &metadataEntry{}
@@ -280,7 +280,7 @@ func TestCacheConcurrency(t *testing.T) {
 			defer wg.Done()
 			key := "pr:42"
 			for j := 0; j < iterations; j++ {
-				mc.set(key, int64(id*1000+j), "etag")
+				mc.set(key, int64(id*1000+j), "sha")
 				mc.get(key)
 				mc.snapshot()
 				if j%10 == 0 {

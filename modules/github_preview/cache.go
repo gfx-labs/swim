@@ -10,7 +10,7 @@ import (
 // metadata cache entry
 type metadataEntry struct {
 	artifactID int64
-	etag       string
+	headSHA    string
 	resolvedAt time.Time
 }
 
@@ -51,12 +51,12 @@ func (c *MetadataCache) get(key string) (entry *metadataEntry, fresh bool) {
 	return e, !e.isStale(c.ttl)
 }
 
-func (c *MetadataCache) set(key string, artifactID int64, etag string) {
+func (c *MetadataCache) set(key string, artifactID int64, headSHA string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries[key] = &metadataEntry{
 		artifactID: artifactID,
-		etag:       etag,
+		headSHA:    headSHA,
 		resolvedAt: time.Now(),
 	}
 }

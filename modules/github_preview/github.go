@@ -91,10 +91,6 @@ type ghWorkflowRun struct {
 	HTMLURL    string `json:"html_url"`
 }
 
-type ghWorkflowRunsResponse struct {
-	TotalCount   int             `json:"total_count"`
-	WorkflowRuns []ghWorkflowRun `json:"workflow_runs"`
-}
 
 type ghArtifact struct {
 	ID                 int64  `json:"id"`
@@ -103,9 +99,10 @@ type ghArtifact struct {
 	Expired            bool   `json:"expired"`
 	Digest             string `json:"digest"`
 	ArchiveDownloadURL string `json:"archive_download_url"`
-	WorkflowRun        *struct {
+	WorkflowRun *struct {
 		ID         int64  `json:"id"`
 		HeadBranch string `json:"head_branch"`
+		HeadSHA    string `json:"head_sha"`
 	} `json:"workflow_run"`
 }
 
@@ -123,29 +120,19 @@ type ResolutionResult struct {
 }
 
 // ResolvePR resolves a PR number to an artifact ID through the GitHub API chain:
-// PR number -> PR (branch) -> latest successful workflow run for branch -> artifact
+// PR number -> PR (branch) -> workflow runs for branch -> first run with our artifact
 //
-// queries by branch name (not head SHA) so that previous successful builds
-// are found even if the current head commit's build failed or is in progress.
+// queries by branch name (not head SHA) so that previous builds are found
+// even if the current head commit's build failed or is in progress.
 func (c *GithubClient) ResolvePR(ctx context.Context, pr int) (*ResolutionResult, error) {
-	// get PR by number
 	prInfo, err := c.getPR(ctx, pr)
 	if err != nil {
 		return nil, fmt.Errorf("get PR #%d: %w", pr, err)
 	}
 
-	branch := prInfo.Head.Ref
-
-	// find latest successful workflow run for this branch
-	run, err := c.findWorkflowRun(ctx, branch)
+	run, artifact, err := c.resolveArtifact(ctx, prInfo.Head.Ref)
 	if err != nil {
-		return nil, fmt.Errorf("find workflow run for branch %s: %w", branch, err)
-	}
-
-	// find artifact in the run
-	artifact, err := c.findArtifact(ctx, run.ID)
-	if err != nil {
-		return nil, fmt.Errorf("find artifact in run %d: %w", run.ID, err)
+		return nil, err
 	}
 
 	return &ResolutionResult{
@@ -154,6 +141,63 @@ func (c *GithubClient) ResolvePR(ctx context.Context, pr int) (*ResolutionResult
 		Artifact:    artifact,
 		ArtifactID:  artifact.ID,
 	}, nil
+}
+
+// resolveArtifact finds the most recent artifact with the configured name
+// for a branch. queries workflow runs by branch, then checks each run for
+// the artifact. works as soon as the build step uploads the artifact, even
+// while the workflow run is still in progress.
+func (c *GithubClient) resolveArtifact(ctx context.Context, branch string) (*ghWorkflowRun, *ghArtifact, error) {
+	c.log.Debug("searching workflow runs for branch",
+		zap.String("branch", branch),
+		zap.String("artifact_name", c.artifactName),
+	)
+
+	runsURL := fmt.Sprintf("%s/repos/%s/%s/actions/runs?branch=%s&per_page=10",
+		c.apiURL, c.owner, c.repo, url.QueryEscape(branch))
+
+	var runsResp struct {
+		WorkflowRuns []ghWorkflowRun `json:"workflow_runs"`
+	}
+	if err := c.doJSON(ctx, runsURL, &runsResp); err != nil {
+		return nil, nil, fmt.Errorf("list runs for branch %s: %w", branch, err)
+	}
+
+	// for each run (most recent first), check if it has our artifact
+	for i := range runsResp.WorkflowRuns {
+		run := &runsResp.WorkflowRuns[i]
+
+		// skip runs from other workflows if workflow filter is set
+		if c.workflow != "" {
+			if !strings.HasSuffix(run.Path, "/"+c.workflow) && run.Path != c.workflow {
+				continue
+			}
+		}
+
+		artifactsURL := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d/artifacts",
+			c.apiURL, c.owner, c.repo, run.ID)
+
+		var artifactsResp ghArtifactsResponse
+		if err := c.doJSON(ctx, artifactsURL, &artifactsResp); err != nil {
+			continue
+		}
+
+		for j := range artifactsResp.Artifacts {
+			a := &artifactsResp.Artifacts[j]
+			if a.Name == c.artifactName && !a.Expired {
+				c.log.Debug("found artifact",
+					zap.Int64("artifact_id", a.ID),
+					zap.Int64("run_id", run.ID),
+					zap.String("branch", run.HeadBranch),
+					zap.String("head_sha", run.HeadSHA),
+					zap.Int64("size_bytes", a.SizeInBytes),
+				)
+				return run, a, nil
+			}
+		}
+	}
+
+	return nil, nil, fmt.Errorf("no artifact '%s' found for branch %s", c.artifactName, branch)
 }
 
 // DownloadArtifact downloads an artifact zip to a temp file on disk and returns
@@ -193,18 +237,14 @@ func (c *GithubClient) DownloadArtifact(ctx context.Context, artifactID int64, m
 		return nil, 0, nil, fmt.Errorf("artifact %d size %d exceeds max %d", artifactID, resp.ContentLength, maxSize)
 	}
 
-	// build a namespaced path: {tmpdir}/swim-github-preview/{host}/{owner}/{repo}/{workflow}/{artifact_name}/{artifact_id}.zip
+	// build a namespaced path: {tmpdir}/swim-github-preview/{host}/{owner}/{repo}/{artifact_name}/{artifact_id}.zip
 	apiHost := "github.com"
 	if parsedURL, parseErr := url.Parse(c.apiURL); parseErr == nil && parsedURL.Host != "" {
 		apiHost = parsedURL.Host
 	}
-	workflow := c.workflow
-	if workflow == "" {
-		workflow = "_default"
-	}
 	zipPath := filepath.Join(
 		os.TempDir(), "swim-github-preview",
-		apiHost, c.owner, c.repo, workflow, c.artifactName,
+		apiHost, c.owner, c.repo, c.artifactName,
 		fmt.Sprintf("%d.zip", artifactID),
 	)
 
@@ -227,41 +267,13 @@ func (c *GithubClient) DownloadArtifact(ctx context.Context, artifactID int64, m
 	return fs, size, cleanup, nil
 }
 
-// GetPRInfo fetches PR info for the debug endpoint.
-// uses tryAcquire so it fails fast if rate limited.
-func (c *GithubClient) GetPRInfo(ctx context.Context, pr int) (*ghPullRequest, error) {
-	if !c.limiter.tryAcquire() {
-		return nil, fmt.Errorf("rate limited")
-	}
-	return c.getPR(ctx, pr)
-}
-
-// GetPRState fetches just the state of a PR ("open", "closed").
-// uses the blocking rate limiter since this is called from the background pruner.
+// GetPRState fetches the state of a PR ("open", "closed").
 func (c *GithubClient) GetPRState(ctx context.Context, pr int) (string, error) {
 	prInfo, err := c.getPR(ctx, pr)
 	if err != nil {
 		return "", err
 	}
 	return prInfo.State, nil
-}
-
-// GetLatestRunInfo fetches the latest successful workflow run for a branch.
-// uses tryAcquire so it fails fast if rate limited.
-func (c *GithubClient) GetLatestRunInfo(ctx context.Context, branch string) (*ghWorkflowRun, error) {
-	if !c.limiter.tryAcquire() {
-		return nil, fmt.Errorf("rate limited")
-	}
-	return c.findWorkflowRun(ctx, branch)
-}
-
-// GetArtifactInfo fetches artifact info for a run.
-// uses tryAcquire so it fails fast if rate limited.
-func (c *GithubClient) GetArtifactInfo(ctx context.Context, runID int64) (*ghArtifact, error) {
-	if !c.limiter.tryAcquire() {
-		return nil, fmt.Errorf("rate limited")
-	}
-	return c.findArtifact(ctx, runID)
 }
 
 // getPR fetches a single PR by number: GET /repos/{owner}/{repo}/pulls/{number}
@@ -283,58 +295,7 @@ func (c *GithubClient) getPR(ctx context.Context, pr int) (*ghPullRequest, error
 	return &prInfo, nil
 }
 
-func (c *GithubClient) findWorkflowRun(ctx context.Context, branch string) (*ghWorkflowRun, error) {
-	c.log.Debug("searching workflow runs", zap.String("branch", branch), zap.String("workflow_filter", c.workflow))
-	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs?branch=%s&status=success&per_page=20",
-		c.apiURL, c.owner, c.repo, url.QueryEscape(branch))
 
-	var runs ghWorkflowRunsResponse
-	if err := c.doJSON(ctx, url, &runs); err != nil {
-		return nil, err
-	}
-
-	for i := range runs.WorkflowRuns {
-		run := &runs.WorkflowRuns[i]
-		if c.workflow != "" {
-			// filter by workflow file name (path ends with the workflow name)
-			if !strings.HasSuffix(run.Path, "/"+c.workflow) && run.Path != c.workflow {
-				continue
-			}
-		}
-		c.log.Debug("found workflow run",
-			zap.Int64("run_id", run.ID),
-			zap.String("path", run.Path),
-			zap.String("head_sha", run.HeadSHA),
-			zap.String("conclusion", run.Conclusion),
-		)
-		return run, nil
-	}
-
-	if c.workflow != "" {
-		return nil, fmt.Errorf("no successful workflow run found for branch %s with workflow '%s'", branch, c.workflow)
-	}
-	return nil, fmt.Errorf("no successful workflow run found for branch %s", branch)
-}
-
-func (c *GithubClient) findArtifact(ctx context.Context, runID int64) (*ghArtifact, error) {
-	c.log.Debug("searching artifacts", zap.Int64("run_id", runID), zap.String("artifact_name", c.artifactName))
-	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d/artifacts",
-		c.apiURL, c.owner, c.repo, runID)
-
-	var artifacts ghArtifactsResponse
-	if err := c.doJSON(ctx, url, &artifacts); err != nil {
-		return nil, err
-	}
-
-	for i := range artifacts.Artifacts {
-		a := &artifacts.Artifacts[i]
-		if a.Name == c.artifactName && !a.Expired {
-			return a, nil
-		}
-	}
-
-	return nil, fmt.Errorf("no artifact named '%s' found in run %d", c.artifactName, runID)
-}
 
 func (c *GithubClient) doJSON(ctx context.Context, url string, v any) error {
 	if err := c.limiter.wait(ctx); err != nil {

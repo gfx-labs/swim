@@ -168,7 +168,6 @@ func TestUnmarshalCaddyfile(t *testing.T) {
 			input: `github_preview {
 				repo "owner/repo"
 				token "ghp_xxxx"
-				workflow "build.yml"
 				artifact_name "build-output"
 				artifact_type ".tar.gz"
 				workdir "/public"
@@ -186,7 +185,6 @@ func TestUnmarshalCaddyfile(t *testing.T) {
 			check: func(t *testing.T, g *GithubPreview) {
 				require.Equal(t, "owner/repo", g.Repo)
 				require.Equal(t, "ghp_xxxx", g.Token)
-				require.Equal(t, "build.yml", g.Workflow)
 				require.Equal(t, "build-output", g.ArtifactName)
 				require.Equal(t, ".tar.gz", g.ArtifactType)
 				require.Equal(t, "/public", g.WorkDir)
