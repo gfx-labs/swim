@@ -58,7 +58,6 @@ func (r *refreshRequest) valid() bool {
 type refreshResponse struct {
 	Key        string `json:"key"`
 	ArtifactID int64  `json:"artifact_id"`
-	Verified   bool   `json:"verified"`
 	Cached     bool   `json:"cached"`
 	Error      string `json:"error,omitempty"`
 }
@@ -83,31 +82,15 @@ func (g *GithubPreview) handleRefresh(w http.ResponseWriter, r *http.Request) er
 	key := req.key()
 	ctx := r.Context()
 
-	if req.ArtifactID != 0 {
-		// download and cache the artifact directly
-		_, err := g.downloadAndCache(ctx, key, req.ArtifactID, "")
+	// always do a full resolve
+	sfKey := "resolve:" + key
+	_, err, _ := g.singleflight.Do(sfKey, func() (any, error) {
+		fs, err := g.fullResolve(ctx, key)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, refreshResponse{
-				Key:        key,
-				ArtifactID: req.ArtifactID,
-				Error:      err.Error(),
-			})
-			return nil
+			g.singleflight.Forget(sfKey)
+			return nil, err
 		}
-
-		writeJSON(w, http.StatusOK, refreshResponse{
-			Key:        key,
-			ArtifactID: req.ArtifactID,
-			Verified:   true,
-			Cached:     true,
-		})
-		return nil
-	}
-
-	// no artifact hint -- do full resolution
-	_, err, _ := g.singleflight.Do("resolve:"+key, func() (any, error) {
-		_, err := g.fullResolve(ctx, key)
-		return nil, err
+		return fs, nil
 	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, refreshResponse{
@@ -123,10 +106,19 @@ func (g *GithubPreview) handleRefresh(w http.ResponseWriter, r *http.Request) er
 		aid = meta.artifactID
 	}
 
+	// if client provided an expected artifact_id, verify it matches
+	if req.ArtifactID != 0 && aid != req.ArtifactID {
+		writeJSON(w, http.StatusConflict, refreshResponse{
+			Key:        key,
+			ArtifactID: aid,
+			Error:      fmt.Sprintf("expected artifact %d but resolved %d", req.ArtifactID, aid),
+		})
+		return nil
+	}
+
 	writeJSON(w, http.StatusOK, refreshResponse{
 		Key:        key,
 		ArtifactID: aid,
-		Verified:   true,
 		Cached:     true,
 	})
 	return nil

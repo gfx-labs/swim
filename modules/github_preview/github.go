@@ -227,47 +227,6 @@ func (c *GithubClient) DownloadArtifact(ctx context.Context, artifactID int64, m
 	return fs, size, cleanup, nil
 }
 
-// VerifyArtifactForPR checks that an artifact ID belongs to a workflow run
-// whose branch matches the given PR's head branch
-func (c *GithubClient) VerifyArtifactForPR(ctx context.Context, pr int, artifactID int64) error {
-	if err := c.limiter.wait(ctx); err != nil {
-		return fmt.Errorf("rate limited: %w", err)
-	}
-
-	// get the PR to find its head branch
-	prInfo, err := c.getPR(ctx, pr)
-	if err != nil {
-		return fmt.Errorf("get PR #%d: %w", pr, err)
-	}
-
-	// get artifact metadata
-	artifactURL := fmt.Sprintf("%s/repos/%s/%s/actions/artifacts/%d",
-		c.apiURL, c.owner, c.repo, artifactID)
-	var artifact ghArtifact
-	if err := c.doJSON(ctx, artifactURL, &artifact); err != nil {
-		return fmt.Errorf("get artifact %d: %w", artifactID, err)
-	}
-
-	if artifact.WorkflowRun == nil {
-		return fmt.Errorf("artifact %d has no associated workflow run", artifactID)
-	}
-
-	// get the workflow run to check head branch
-	runURL := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d",
-		c.apiURL, c.owner, c.repo, artifact.WorkflowRun.ID)
-	var run ghWorkflowRun
-	if err := c.doJSON(ctx, runURL, &run); err != nil {
-		return fmt.Errorf("get workflow run %d: %w", artifact.WorkflowRun.ID, err)
-	}
-
-	if run.HeadBranch != prInfo.Head.Ref {
-		return fmt.Errorf("artifact %d does not belong to PR #%d (branch mismatch: artifact=%s, pr=%s)",
-			artifactID, pr, run.HeadBranch, prInfo.Head.Ref)
-	}
-
-	return nil
-}
-
 // GetPRInfo fetches PR info for the debug endpoint.
 // uses tryAcquire so it fails fast if rate limited.
 func (c *GithubClient) GetPRInfo(ctx context.Context, pr int) (*ghPullRequest, error) {
