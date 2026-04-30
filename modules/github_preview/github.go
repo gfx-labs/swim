@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/gfx-labs/swim/pkg/archive"
@@ -153,8 +152,9 @@ func (c *GithubClient) resolveArtifact(ctx context.Context, branch string) (*ghW
 		zap.String("artifact_name", c.artifactName),
 	)
 
-	runsURL := fmt.Sprintf("%s/repos/%s/%s/actions/runs?branch=%s&per_page=10",
-		c.apiURL, c.owner, c.repo, url.QueryEscape(branch))
+	// use the workflow-specific runs endpoint to filter server-side
+	runsURL := fmt.Sprintf("%s/repos/%s/%s/actions/workflows/%s/runs?branch=%s&per_page=5",
+		c.apiURL, c.owner, c.repo, url.PathEscape(c.workflow), url.QueryEscape(branch))
 
 	var runsResp struct {
 		WorkflowRuns []ghWorkflowRun `json:"workflow_runs"`
@@ -166,13 +166,6 @@ func (c *GithubClient) resolveArtifact(ctx context.Context, branch string) (*ghW
 	// for each run (most recent first), check if it has our artifact
 	for i := range runsResp.WorkflowRuns {
 		run := &runsResp.WorkflowRuns[i]
-
-		// skip runs from other workflows if workflow filter is set
-		if c.workflow != "" {
-			if !strings.HasSuffix(run.Path, "/"+c.workflow) && run.Path != c.workflow {
-				continue
-			}
-		}
 
 		artifactsURL := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d/artifacts",
 			c.apiURL, c.owner, c.repo, run.ID)

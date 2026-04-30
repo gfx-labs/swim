@@ -22,6 +22,7 @@ func newTestClient(url string, opts ...func(*githubClientConfig)) *GithubClient 
 		repo:         "testrepo",
 		token:        "test-token",
 		apiURL:       url,
+		workflow:     "build.yml",
 		artifactName: "site",
 		artifactType: ".zip",
 		timeout:      5 * time.Second,
@@ -102,7 +103,7 @@ func TestGetPR(t *testing.T) {
 func TestResolveArtifact(t *testing.T) {
 	t.Run("finds artifact for branch", func(t *testing.T) {
 		mux := http.NewServeMux()
-		mux.HandleFunc("/repos/testowner/testrepo/actions/runs", jsonHandler(struct {
+		mux.HandleFunc("/repos/testowner/testrepo/actions/workflows/build.yml/runs", jsonHandler(struct {
 			WorkflowRuns []ghWorkflowRun `json:"workflow_runs"`
 		}{
 			WorkflowRuns: []ghWorkflowRun{
@@ -125,7 +126,7 @@ func TestResolveArtifact(t *testing.T) {
 
 	t.Run("skips run without matching artifact", func(t *testing.T) {
 		mux := http.NewServeMux()
-		mux.HandleFunc("/repos/testowner/testrepo/actions/runs", jsonHandler(struct {
+		mux.HandleFunc("/repos/testowner/testrepo/actions/workflows/build.yml/runs", jsonHandler(struct {
 			WorkflowRuns []ghWorkflowRun `json:"workflow_runs"`
 		}{
 			WorkflowRuns: []ghWorkflowRun{
@@ -150,7 +151,7 @@ func TestResolveArtifact(t *testing.T) {
 
 	t.Run("no runs for branch", func(t *testing.T) {
 		mux := http.NewServeMux()
-		mux.HandleFunc("/repos/testowner/testrepo/actions/runs", jsonHandler(struct {
+		mux.HandleFunc("/repos/testowner/testrepo/actions/workflows/build.yml/runs", jsonHandler(struct {
 			WorkflowRuns []ghWorkflowRun `json:"workflow_runs"`
 		}{WorkflowRuns: []ghWorkflowRun{}}))
 		srv := httptest.NewServer(mux)
@@ -175,7 +176,7 @@ func TestResolvePR(t *testing.T) {
 		}{SHA: "deadbeef", Ref: "my-branch"},
 	}))
 
-	mux.HandleFunc("/repos/testowner/testrepo/actions/runs", jsonHandler(struct {
+	mux.HandleFunc("/repos/testowner/testrepo/actions/workflows/build.yml/runs", jsonHandler(struct {
 		WorkflowRuns []ghWorkflowRun `json:"workflow_runs"`
 	}{
 		WorkflowRuns: []ghWorkflowRun{
