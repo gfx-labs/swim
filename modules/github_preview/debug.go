@@ -12,11 +12,13 @@ type debugResponse struct {
 }
 
 type debugCache struct {
-	Status       string `json:"status"`
-	ArtifactID   int64  `json:"artifact_id,omitempty"`
-	HeadSHA      string `json:"head_sha,omitempty"`
-	ResolvedAt   string `json:"resolved_at,omitempty"`
-	TTLRemaining string `json:"ttl_remaining,omitempty"`
+	Status        string `json:"status"`
+	ArtifactID    int64  `json:"artifact_id,omitempty"`
+	HeadSHA       string `json:"head_sha,omitempty"`
+	HeadSHASource string `json:"head_sha_source,omitempty"`
+	RunCreatedAt  string `json:"run_created_at,omitempty"`
+	ResolvedAt    string `json:"resolved_at,omitempty"`
+	TTLRemaining  string `json:"ttl_remaining,omitempty"`
 }
 
 type debugConfig struct {
@@ -47,6 +49,10 @@ func (g *GithubPreview) handleDebug(w http.ResponseWriter, r *http.Request, key 
 		resp.Cache.Status = "hit"
 		resp.Cache.ArtifactID = meta.artifactID
 		resp.Cache.HeadSHA = meta.headSHA
+		resp.Cache.RunCreatedAt = meta.runCreatedAt
+		if meta.runCreatedAt != "" {
+			resp.Cache.HeadSHASource = "git_ref"
+		}
 		resp.Cache.ResolvedAt = meta.resolvedAt.Format(time.RFC3339)
 		remaining := time.Duration(g.MetadataTTL) - time.Since(meta.resolvedAt)
 		if remaining < 0 {
@@ -57,6 +63,10 @@ func (g *GithubPreview) handleDebug(w http.ResponseWriter, r *http.Request, key 
 		resp.Cache.Status = "stale"
 		resp.Cache.ArtifactID = meta.artifactID
 		resp.Cache.HeadSHA = meta.headSHA
+		resp.Cache.RunCreatedAt = meta.runCreatedAt
+		if meta.runCreatedAt != "" {
+			resp.Cache.HeadSHASource = "git_ref"
+		}
 		resp.Cache.ResolvedAt = meta.resolvedAt.Format(time.RFC3339)
 		resp.Cache.TTLRemaining = "0s"
 	}

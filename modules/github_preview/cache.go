@@ -9,9 +9,11 @@ import (
 
 // metadata cache entry
 type metadataEntry struct {
-	artifactID int64
-	headSHA    string
-	resolvedAt time.Time
+	artifactID   int64
+	headSHA      string
+	runCreatedAt string
+	runID        int64
+	resolvedAt   time.Time
 }
 
 func (m *metadataEntry) isStale(ttl time.Duration) bool {
@@ -48,17 +50,38 @@ func (c *MetadataCache) get(key string) (entry *metadataEntry, fresh bool) {
 	if !ok {
 		return nil, false
 	}
-	return e, !e.isStale(c.ttl)
+	copy := *e
+	return &copy, !copy.isStale(c.ttl)
 }
 
 func (c *MetadataCache) set(key string, artifactID int64, headSHA string) {
+	c.setRun(key, artifactID, headSHA, "", 0)
+}
+
+func (c *MetadataCache) touch(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.entries[key] = &metadataEntry{
-		artifactID: artifactID,
-		headSHA:    headSHA,
-		resolvedAt: time.Now(),
+	if e := c.entries[key]; e != nil {
+		e.resolvedAt = time.Now()
 	}
+}
+
+// setRun refuses older branch runs for the same head. A changed head is authoritative.
+func (c *MetadataCache) setRun(key string, artifactID int64, headSHA, createdAt string, runID int64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if old := c.entries[key]; old != nil && len(key) >= 7 && key[:7] == "branch:" && old.headSHA == headSHA && old.runCreatedAt != "" && (createdAt < old.runCreatedAt || createdAt == old.runCreatedAt && runID < old.runID) {
+		old.resolvedAt = time.Now()
+		return false
+	}
+	c.entries[key] = &metadataEntry{
+		artifactID:   artifactID,
+		headSHA:      headSHA,
+		runCreatedAt: createdAt,
+		runID:        runID,
+		resolvedAt:   time.Now(),
+	}
+	return true
 }
 
 func (c *MetadataCache) evict(key string) bool {

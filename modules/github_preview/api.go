@@ -81,6 +81,45 @@ func (g *GithubPreview) handleRefresh(w http.ResponseWriter, r *http.Request) er
 
 	key := req.key()
 	ctx := r.Context()
+	if req.Branch != "" && req.ArtifactID != 0 {
+		artifact, err := g.client.artifactByID(ctx, req.ArtifactID)
+		if err != nil {
+			writeJSON(w, http.StatusConflict, refreshResponse{Key: key, Error: fmt.Sprintf("cannot verify artifact: %v", err)})
+			return nil
+		}
+		if artifact.Name != g.ArtifactName || artifact.Expired || artifact.WorkflowRun == nil || artifact.WorkflowRun.HeadBranch != req.Branch {
+			writeJSON(w, http.StatusConflict, refreshResponse{Key: key, Error: "artifact name, expiry, or branch does not match"})
+			return nil
+		}
+		head, err := g.client.branchHead(ctx, req.Branch)
+		if err != nil {
+			writeJSON(w, http.StatusConflict, refreshResponse{Key: key, Error: fmt.Sprintf("cannot verify branch head: %v", err)})
+			return nil
+		}
+		if artifact.WorkflowRun.HeadSHA != head {
+			writeJSON(w, http.StatusConflict, refreshResponse{Key: key, Error: "artifact SHA does not match current branch head"})
+			return nil
+		}
+		var run ghWorkflowRun
+		runURL := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d", g.client.apiURL, g.client.owner, g.client.repo, artifact.WorkflowRun.ID)
+		if err := g.client.doJSON(ctx, runURL, &run); err != nil || run.HeadBranch != req.Branch || run.HeadSHA != head || run.Event != "push" {
+			writeJSON(w, http.StatusConflict, refreshResponse{Key: key, Error: "artifact workflow run is not a push for the branch head"})
+			return nil
+		}
+		if old, _ := g.metadataCache.get(key); old != nil && old.headSHA == head && old.runCreatedAt != "" && (run.CreatedAt < old.runCreatedAt || run.CreatedAt == old.runCreatedAt && run.ID < old.runID) {
+			writeJSON(w, http.StatusConflict, refreshResponse{Key: key, Error: "artifact run is older than cached run"})
+			return nil
+		}
+		if fs, ok := g.artifactCache.get(req.ArtifactID); ok {
+			g.metadataCache.setRun(key, req.ArtifactID, head, run.CreatedAt, run.ID)
+			g.registerFs(key, fs)
+		} else if _, err := g.downloadAndCache(ctx, key, req.ArtifactID, artifact.Digest, head, run.CreatedAt, run.ID); err != nil {
+			writeJSON(w, http.StatusInternalServerError, refreshResponse{Key: key, Error: err.Error()})
+			return nil
+		}
+		writeJSON(w, http.StatusOK, refreshResponse{Key: key, ArtifactID: req.ArtifactID, Cached: true})
+		return nil
+	}
 
 	// always do a full resolve
 	sfKey := "resolve:" + key

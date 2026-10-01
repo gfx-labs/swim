@@ -8,8 +8,47 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/afero"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
+
+func TestRefreshBranchArtifactPin(t *testing.T) {
+	for _, tt := range []struct {
+		name, artifactBranch string
+		status               int
+		wantID               int64
+	}{
+		{"pins verified artifact without workflow listing", "master", http.StatusOK, 77},
+		{"rejects wrong branch artifact", "release", http.StatusConflict, 11},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/repos/testowner/testrepo/actions/artifacts/77":
+					jsonHandler(map[string]any{"id": 77, "name": "site", "workflow_run": map[string]any{"id": 70, "head_branch": tt.artifactBranch, "head_sha": "head"}})(w, r)
+				case "/repos/testowner/testrepo/git/ref/heads/master":
+					jsonHandler(map[string]any{"object": map[string]string{"sha": "head"}})(w, r)
+				case "/repos/testowner/testrepo/actions/runs/70":
+					jsonHandler(ghWorkflowRun{ID: 70, HeadBranch: "master", HeadSHA: "head", Event: "push", CreatedAt: "2026-10-01T10:00:00Z"})(w, r)
+				default:
+					t.Errorf("unexpected GitHub request: %s", r.URL)
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+			g := &GithubPreview{ArtifactName: "site", client: newTestClient(srv.URL), metadataCache: newMetadataCache(time.Minute), artifactCache: newArtifactCache(2), log: zap.NewNop()}
+			g.metadataCache.setRun("branch:master", 11, "old", "2026-09-30T10:00:00Z", 11)
+			g.artifactCache.set(77, afero.NewMemMapFs(), 0, nil)
+			r := httptest.NewRequest(http.MethodPost, "/refresh", bytes.NewBufferString(`{"branch":"master","artifact_id":77}`))
+			w := httptest.NewRecorder()
+			require.NoError(t, g.handleRefresh(w, r))
+			require.Equal(t, tt.status, w.Code, w.Body.String())
+			meta, _ := g.metadataCache.get("branch:master")
+			require.Equal(t, tt.wantID, meta.artifactID)
+		})
+	}
+}
 
 func TestAuthenticateAPI(t *testing.T) {
 	tests := []struct {

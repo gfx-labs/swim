@@ -3,11 +3,15 @@ package github_preview
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/gfx-labs/swim/pkg/archive"
@@ -87,9 +91,13 @@ type ghWorkflowRun struct {
 	HeadSHA    string `json:"head_sha"`
 	Path       string `json:"path"`
 	CreatedAt  string `json:"created_at"`
+	Event      string `json:"event"`
 	HTMLURL    string `json:"html_url"`
 }
 
+var errNoArtifactForHead = errors.New("no artifact for branch head")
+
+var runURLPattern = regexp.MustCompile(`/actions/runs/([0-9]+)(?:/|$)`)
 
 type ghArtifact struct {
 	ID                 int64  `json:"id"`
@@ -98,7 +106,7 @@ type ghArtifact struct {
 	Expired            bool   `json:"expired"`
 	Digest             string `json:"digest"`
 	ArchiveDownloadURL string `json:"archive_download_url"`
-	WorkflowRun *struct {
+	WorkflowRun        *struct {
 		ID         int64  `json:"id"`
 		HeadBranch string `json:"head_branch"`
 		HeadSHA    string `json:"head_sha"`
@@ -129,7 +137,7 @@ func (c *GithubClient) ResolvePR(ctx context.Context, pr int) (*ResolutionResult
 		return nil, fmt.Errorf("get PR #%d: %w", pr, err)
 	}
 
-	run, artifact, err := c.resolveArtifact(ctx, prInfo.Head.Ref)
+	run, artifact, err := c.resolvePRArtifact(ctx, prInfo.Head.Ref)
 	if err != nil {
 		return nil, err
 	}
@@ -142,11 +150,125 @@ func (c *GithubClient) ResolvePR(ctx context.Context, pr int) (*ResolutionResult
 	}, nil
 }
 
-// resolveArtifact finds the most recent artifact with the configured name
-// for a branch. queries workflow runs by branch, then checks each run for
-// the artifact. works as soon as the build step uploads the artifact, even
-// while the workflow run is still in progress.
+func (c *GithubClient) branchHead(ctx context.Context, branch string) (string, error) {
+	parts := strings.Split(branch, "/")
+	for i := range parts {
+		parts[i] = url.PathEscape(parts[i])
+	}
+	var ref struct {
+		Object struct {
+			SHA string `json:"sha"`
+		} `json:"object"`
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/git/ref/heads/%s", c.apiURL, c.owner, c.repo, strings.Join(parts, "/"))
+	if err := c.doJSON(ctx, endpoint, &ref); err != nil {
+		return "", fmt.Errorf("get branch head %s: %w", branch, err)
+	}
+	if ref.Object.SHA == "" {
+		return "", fmt.Errorf("empty branch head for %s", branch)
+	}
+	return ref.Object.SHA, nil
+}
+
+// resolveArtifact uses the current branch head, not the stale branch search index.
+// artifacts are available as soon as uploaded, even before the run completes.
 func (c *GithubClient) resolveArtifact(ctx context.Context, branch string) (*ghWorkflowRun, *ghArtifact, error) {
+	head, err := c.branchHead(ctx, branch)
+	if err != nil {
+		return nil, nil, err
+	}
+	runsURL := fmt.Sprintf("%s/repos/%s/%s/actions/workflows/%s/runs?head_sha=%s&per_page=100", c.apiURL, c.owner, c.repo, url.PathEscape(c.workflow), url.QueryEscape(head))
+	var response struct {
+		WorkflowRuns []ghWorkflowRun `json:"workflow_runs"`
+	}
+	if err := c.doJSON(ctx, runsURL, &response); err != nil {
+		return nil, nil, fmt.Errorf("list runs for head %s: %w", head, err)
+	}
+	runs := matchingRuns(response.WorkflowRuns, branch, head)
+	if len(runs) == 0 {
+		fallback, err := c.checkRuns(ctx, branch, head)
+		if err != nil {
+			return nil, nil, err
+		}
+		runs = matchingRuns(fallback, branch, head)
+	}
+	for i := range runs {
+		run := &runs[i]
+		var artifacts ghArtifactsResponse
+		endpoint := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d/artifacts?per_page=100", c.apiURL, c.owner, c.repo, run.ID)
+		if err := c.doJSON(ctx, endpoint, &artifacts); err != nil {
+			return nil, nil, err
+		}
+		for j := range artifacts.Artifacts {
+			a := &artifacts.Artifacts[j]
+			if a.Name == c.artifactName && !a.Expired {
+				return run, a, nil
+			}
+		}
+	}
+	return nil, nil, fmt.Errorf("%w: %s (%s)", errNoArtifactForHead, branch, head)
+}
+
+func matchingRuns(all []ghWorkflowRun, branch, head string) []ghWorkflowRun {
+	var runs []ghWorkflowRun
+	for _, run := range all {
+		if run.HeadBranch == branch && run.HeadSHA == head && run.Event == "push" {
+			runs = append(runs, run)
+		}
+	}
+	sort.Slice(runs, func(i, j int) bool {
+		if runs[i].CreatedAt == runs[j].CreatedAt {
+			return runs[i].ID > runs[j].ID
+		}
+		return runs[i].CreatedAt > runs[j].CreatedAt
+	})
+	return runs
+}
+
+func (c *GithubClient) checkRuns(ctx context.Context, branch, head string) ([]ghWorkflowRun, error) {
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/commits/%s/check-runs?per_page=100", c.apiURL, c.owner, c.repo, url.PathEscape(head))
+	var response struct {
+		CheckRuns []struct {
+			App struct {
+				Slug string `json:"slug"`
+			} `json:"app"`
+			DetailsURL string `json:"details_url"`
+		} `json:"check_runs"`
+	}
+	if err := c.doJSON(ctx, endpoint, &response); err != nil {
+		return nil, fmt.Errorf("list check runs for %s: %w", head, err)
+	}
+	seen := make(map[string]bool)
+	var runs []ghWorkflowRun
+	for _, check := range response.CheckRuns {
+		if check.App.Slug != "github-actions" {
+			continue
+		}
+		match := runURLPattern.FindStringSubmatch(check.DetailsURL)
+		if len(match) < 2 || seen[match[1]] {
+			continue
+		}
+		seen[match[1]] = true
+		var run ghWorkflowRun
+		endpoint := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%s", c.apiURL, c.owner, c.repo, match[1])
+		if err := c.doJSON(ctx, endpoint, &run); err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	return runs, nil
+}
+
+func (c *GithubClient) artifactByID(ctx context.Context, id int64) (*ghArtifact, error) {
+	var artifact ghArtifact
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/actions/artifacts/%d", c.apiURL, c.owner, c.repo, id)
+	if err := c.doJSON(ctx, endpoint, &artifact); err != nil {
+		return nil, err
+	}
+	return &artifact, nil
+}
+
+func (c *GithubClient) resolvePRArtifact(ctx context.Context, branch string) (*ghWorkflowRun, *ghArtifact, error) {
 	c.log.Debug("searching workflow runs for branch",
 		zap.String("branch", branch),
 		zap.String("artifact_name", c.artifactName),
@@ -287,8 +409,6 @@ func (c *GithubClient) getPR(ctx context.Context, pr int) (*ghPullRequest, error
 	)
 	return &prInfo, nil
 }
-
-
 
 func (c *GithubClient) doJSON(ctx context.Context, url string, v any) error {
 	if err := c.limiter.wait(ctx); err != nil {

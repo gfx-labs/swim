@@ -61,7 +61,7 @@ type GithubPreview struct {
 	//
 	// For public repos, requests work without a token but are limited to
 	// 60 requests/hour. Authenticated requests get 5,000 requests/hour.
-	Token string `json:"token"`
+	Token        string `json:"token"`
 	Workflow     string `json:"workflow"`
 	ArtifactName string `json:"artifact_name,omitempty"`
 	ArtifactType string `json:"artifact_type,omitempty"`
@@ -76,7 +76,7 @@ type GithubPreview struct {
 	MaxArtifacts         int      `json:"max_artifacts,omitempty"`
 	MaxArtifactSize      int64    `json:"max_artifact_size,omitempty"`
 	StaleWhileRevalidate bool     `json:"stale_while_revalidate,omitempty"`
-	PruneInterval        Duration `json:"prune_interval,omitempty"`    // how often to run background pruning (default 6h)
+	PruneInterval        Duration `json:"prune_interval,omitempty"`   // how often to run background pruning (default 6h)
 	MaxArtifactAge       Duration `json:"max_artifact_age,omitempty"` // evict artifacts not accessed in this long (default: disabled)
 	ReadCacheSize        int64    `json:"read_cache_size,omitempty"`  // per-artifact LRU read cache in bytes (default 10MB)
 
@@ -354,7 +354,7 @@ func (g *GithubPreview) resolveAndRegister(ctx context.Context, key string) (str
 		if _, ok := g.artifactCache.get(meta.artifactID); ok {
 			return regKey, nil
 		}
-		_, err := g.downloadAndCache(ctx, key, meta.artifactID, "", meta.headSHA)
+		_, err := g.downloadAndCache(ctx, key, meta.artifactID, "", meta.headSHA, meta.runCreatedAt, meta.runID)
 		if err != nil {
 			return "", err
 		}
@@ -381,6 +381,18 @@ func (g *GithubPreview) resolveAndRegister(ctx context.Context, key string) (str
 		return fs, nil
 	})
 	if err != nil {
+		if strings.HasPrefix(key, "branch:") {
+			if cached, _ := g.metadataCache.get(key); cached != nil {
+				g.metadataCache.touch(key) // retry after the metadata TTL instead of hammering GitHub
+				if fs, ok := g.artifactCache.get(cached.artifactID); ok {
+					g.registerFs(key, fs)
+					return regKey, nil
+				}
+				if _, downloadErr := g.downloadAndCache(ctx, key, cached.artifactID, "", cached.headSHA, cached.runCreatedAt, cached.runID); downloadErr == nil {
+					return regKey, nil
+				}
+			}
+		}
 		return "", err
 	}
 	return regKey, nil
@@ -392,17 +404,37 @@ func (g *GithubPreview) fullResolve(ctx context.Context, key string) (afero.Fs, 
 	var digest string
 	var artifactID int64
 	var headSHA string
+	var createdAt string
+	var runID int64
 
 	if strings.HasPrefix(key, "branch:") {
 		branchName := strings.TrimPrefix(key, "branch:")
 
 		run, artifact, err := g.client.resolveArtifact(ctx, branchName)
 		if err != nil {
+			if meta, _ := g.metadataCache.get(key); meta != nil {
+				g.metadataCache.touch(key)
+				if fs, ok := g.artifactCache.get(meta.artifactID); ok {
+					g.registerFs(key, fs)
+					return fs, nil
+				}
+				return g.downloadAndCache(ctx, key, meta.artifactID, "", meta.headSHA, meta.runCreatedAt, meta.runID)
+			}
 			return nil, err
 		}
 		artifactID = artifact.ID
 		digest = artifact.Digest
 		headSHA = run.HeadSHA
+		createdAt = run.CreatedAt
+		runID = run.ID
+		if meta, _ := g.metadataCache.get(key); meta != nil && meta.headSHA == headSHA && meta.runCreatedAt != "" && (createdAt < meta.runCreatedAt || createdAt == meta.runCreatedAt && runID < meta.runID) {
+			g.metadataCache.touch(key)
+			if fs, ok := g.artifactCache.get(meta.artifactID); ok {
+				g.registerFs(key, fs)
+				return fs, nil
+			}
+			return g.downloadAndCache(ctx, key, meta.artifactID, "", meta.headSHA, meta.runCreatedAt, meta.runID)
+		}
 	} else {
 		prStr := strings.TrimPrefix(key, "pr:")
 		prNum, err := strconvAtoi(prStr)
@@ -428,17 +460,19 @@ func (g *GithubPreview) fullResolve(ctx context.Context, key string) (afero.Fs, 
 
 	// check if we already have this artifact cached
 	if fs, ok := g.artifactCache.get(artifactID); ok {
-		g.metadataCache.set(key, artifactID, headSHA)
+		if !g.metadataCache.setRun(key, artifactID, headSHA, createdAt, runID) {
+			return g.cachedBranchFs(key)
+		}
 		g.registerFs(key, fs)
 		return fs, nil
 	}
 
-	return g.downloadAndCache(ctx, key, artifactID, digest, headSHA)
+	return g.downloadAndCache(ctx, key, artifactID, digest, headSHA, createdAt, runID)
 }
 
 // downloadAndCache downloads an artifact and puts it in both caches,
 // then registers the filesystem in the global map
-func (g *GithubPreview) downloadAndCache(ctx context.Context, key string, artifactID int64, expectedDigest string, headSHA string) (afero.Fs, error) {
+func (g *GithubPreview) downloadAndCache(ctx context.Context, key string, artifactID int64, expectedDigest string, headSHA string, runInfo ...any) (afero.Fs, error) {
 	rawFs, size, cleanup, err := g.client.DownloadArtifact(ctx, artifactID, g.MaxArtifactSize, expectedDigest)
 	if err != nil {
 		return nil, err
@@ -451,11 +485,31 @@ func (g *GithubPreview) downloadAndCache(ctx context.Context, key string, artifa
 	layered := afero.NewBasePathFs(rawFs, wd)
 	layered = newLruCacheFs(layered, g.ReadCacheSize)
 
+	var createdAt string
+	var runID int64
+	if len(runInfo) == 2 {
+		createdAt, _ = runInfo[0].(string)
+		runID, _ = runInfo[1].(int64)
+	}
+	if !g.metadataCache.setRun(key, artifactID, headSHA, createdAt, runID) {
+		cleanup()
+		return g.cachedBranchFs(key)
+	}
 	g.artifactCache.set(artifactID, layered, size, cleanup)
-	g.metadataCache.set(key, artifactID, headSHA)
 	g.registerFs(key, layered)
 
 	return layered, nil
+}
+
+func (g *GithubPreview) cachedBranchFs(key string) (afero.Fs, error) {
+	meta, _ := g.metadataCache.get(key)
+	if meta != nil {
+		if fs, ok := g.artifactCache.get(meta.artifactID); ok {
+			g.registerFs(key, fs)
+			return fs, nil
+		}
+	}
+	return nil, fmt.Errorf("cached branch artifact unavailable for %s", key)
 }
 
 // registerFs registers an afero.Fs in Caddy's global FileSystems map

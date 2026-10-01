@@ -44,12 +44,12 @@ func jsonHandler(v any) http.HandlerFunc {
 
 func TestGetPR(t *testing.T) {
 	tests := []struct {
-		name    string
-		pr      int
-		status  int
+		name     string
+		pr       int
+		status   int
 		response ghPullRequest
-		wantErr string
-		wantNum int
+		wantErr  string
+		wantNum  int
 	}{
 		{
 			name:   "fetches PR by number",
@@ -101,66 +101,34 @@ func TestGetPR(t *testing.T) {
 }
 
 func TestResolveArtifact(t *testing.T) {
-	t.Run("finds artifact for branch", func(t *testing.T) {
-		mux := http.NewServeMux()
-		mux.HandleFunc("/repos/testowner/testrepo/actions/workflows/build.yml/runs", jsonHandler(struct {
-			WorkflowRuns []ghWorkflowRun `json:"workflow_runs"`
-		}{
-			WorkflowRuns: []ghWorkflowRun{
-				{ID: 100, HeadBranch: "my-branch", HeadSHA: "abc123"},
-			},
-		}))
-		mux.HandleFunc("/repos/testowner/testrepo/actions/runs/100/artifacts", jsonHandler(ghArtifactsResponse{
-			TotalCount: 1,
-			Artifacts:  []ghArtifact{{ID: 501, Name: "site", Expired: false}},
-		}))
-		srv := httptest.NewServer(mux)
-		defer srv.Close()
-
-		client := newTestClient(srv.URL)
-		run, artifact, err := client.resolveArtifact(context.Background(), "my-branch")
-		require.NoError(t, err)
-		require.Equal(t, int64(501), artifact.ID)
-		require.Equal(t, "my-branch", run.HeadBranch)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/testowner/testrepo/git/ref/heads/my-branch", jsonHandler(map[string]any{"object": map[string]string{"sha": "abc123"}}))
+	mux.HandleFunc("/repos/testowner/testrepo/actions/workflows/build.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "abc123", r.URL.Query().Get("head_sha"))
+		require.Empty(t, r.URL.Query().Get("branch"))
+		jsonHandler(map[string]any{"workflow_runs": []ghWorkflowRun{{ID: 101, HeadBranch: "tag", HeadSHA: "abc123", Event: "push"}, {ID: 100, HeadBranch: "my-branch", HeadSHA: "abc123", Event: "push"}}})(w, r)
 	})
+	mux.HandleFunc("/repos/testowner/testrepo/actions/runs/100/artifacts", jsonHandler(ghArtifactsResponse{Artifacts: []ghArtifact{{ID: 501, Name: "site"}}}))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	run, artifact, err := newTestClient(srv.URL).resolveArtifact(context.Background(), "my-branch")
+	require.NoError(t, err)
+	require.Equal(t, int64(501), artifact.ID)
+	require.Equal(t, int64(100), run.ID)
+}
 
-	t.Run("skips run without matching artifact", func(t *testing.T) {
-		mux := http.NewServeMux()
-		mux.HandleFunc("/repos/testowner/testrepo/actions/workflows/build.yml/runs", jsonHandler(struct {
-			WorkflowRuns []ghWorkflowRun `json:"workflow_runs"`
-		}{
-			WorkflowRuns: []ghWorkflowRun{
-				{ID: 200, HeadBranch: "my-branch", HeadSHA: "aaa"},
-				{ID: 201, HeadBranch: "my-branch", HeadSHA: "bbb"},
-			},
-		}))
-		mux.HandleFunc("/repos/testowner/testrepo/actions/runs/200/artifacts", jsonHandler(ghArtifactsResponse{
-			Artifacts: []ghArtifact{{ID: 600, Name: "site", Expired: true}},
-		}))
-		mux.HandleFunc("/repos/testowner/testrepo/actions/runs/201/artifacts", jsonHandler(ghArtifactsResponse{
-			Artifacts: []ghArtifact{{ID: 601, Name: "site", Expired: false}},
-		}))
-		srv := httptest.NewServer(mux)
-		defer srv.Close()
-
-		client := newTestClient(srv.URL)
-		_, artifact, err := client.resolveArtifact(context.Background(), "my-branch")
-		require.NoError(t, err)
-		require.Equal(t, int64(601), artifact.ID)
-	})
-
-	t.Run("no runs for branch", func(t *testing.T) {
-		mux := http.NewServeMux()
-		mux.HandleFunc("/repos/testowner/testrepo/actions/workflows/build.yml/runs", jsonHandler(struct {
-			WorkflowRuns []ghWorkflowRun `json:"workflow_runs"`
-		}{WorkflowRuns: []ghWorkflowRun{}}))
-		srv := httptest.NewServer(mux)
-		defer srv.Close()
-
-		client := newTestClient(srv.URL)
-		_, _, err := client.resolveArtifact(context.Background(), "my-branch")
-		require.EqualError(t, err, "no artifact 'site' found for branch my-branch")
-	})
+func TestResolveArtifactCheckRunsFallback(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/testowner/testrepo/git/ref/heads/feature/x", jsonHandler(map[string]any{"object": map[string]string{"sha": "abc"}}))
+	mux.HandleFunc("/repos/testowner/testrepo/actions/workflows/build.yml/runs", jsonHandler(map[string]any{"workflow_runs": []any{}}))
+	mux.HandleFunc("/repos/testowner/testrepo/commits/abc/check-runs", jsonHandler(map[string]any{"check_runs": []any{map[string]any{"app": map[string]string{"slug": "github-actions"}, "details_url": "https://github.com/testowner/testrepo/actions/runs/30/job/10"}}}))
+	mux.HandleFunc("/repos/testowner/testrepo/actions/runs/30", jsonHandler(ghWorkflowRun{ID: 30, HeadBranch: "feature/x", HeadSHA: "abc", Event: "push"}))
+	mux.HandleFunc("/repos/testowner/testrepo/actions/runs/30/artifacts", jsonHandler(ghArtifactsResponse{Artifacts: []ghArtifact{{ID: 700, Name: "site"}}}))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	_, artifact, err := newTestClient(srv.URL).resolveArtifact(context.Background(), "feature/x")
+	require.NoError(t, err)
+	require.Equal(t, int64(700), artifact.ID)
 }
 
 func TestResolvePR(t *testing.T) {
@@ -204,7 +172,6 @@ func TestResolvePR(t *testing.T) {
 	require.Equal(t, int64(2001), result.Artifact.ID)
 	require.Equal(t, int64(2001), result.ArtifactID)
 }
-
 
 func TestDownloadArtifact(t *testing.T) {
 	// build a minimal zip in memory
