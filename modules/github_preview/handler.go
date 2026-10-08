@@ -392,17 +392,19 @@ func (g *GithubPreview) fullResolve(ctx context.Context, key string) (afero.Fs, 
 	var digest string
 	var artifactID int64
 	var headSHA string
+	var exactHead bool
 
 	if strings.HasPrefix(key, "branch:") {
 		branchName := strings.TrimPrefix(key, "branch:")
 
-		run, artifact, err := g.client.resolveArtifact(ctx, branchName)
+		res, err := g.client.ResolveBranch(ctx, branchName)
 		if err != nil {
 			return nil, err
 		}
-		artifactID = artifact.ID
-		digest = artifact.Digest
-		headSHA = run.HeadSHA
+		artifactID = res.ArtifactID
+		digest = res.Artifact.Digest
+		headSHA = res.WorkflowRun.HeadSHA
+		exactHead = res.ExactHead()
 	} else {
 		prStr := strings.TrimPrefix(key, "pr:")
 		prNum, err := strconvAtoi(prStr)
@@ -424,6 +426,25 @@ func (g *GithubPreview) fullResolve(ctx context.Context, key string) (afero.Fs, 
 		artifactID = res.ArtifactID
 		digest = res.Artifact.Digest
 		headSHA = res.WorkflowRun.HeadSHA
+		exactHead = res.ExactHead()
+	}
+
+	// guard against the runs listing returning a stale result set
+	// (https://github.com/orgs/community/discussions/206725): artifact IDs
+	// increase monotonically, so never replace a cached artifact with an
+	// older one found via the fallback listing. exact head matches are
+	// trusted so force-pushes/reverts to an older commit still take effect.
+	if meta, _ := g.metadataCache.get(key); meta != nil && !exactHead && artifactID < meta.artifactID {
+		if fs, ok := g.artifactCache.get(meta.artifactID); ok {
+			g.log.Warn("ignoring older artifact from possibly stale GitHub runs listing",
+				zap.String("key", key),
+				zap.Int64("cached_artifact_id", meta.artifactID),
+				zap.Int64("resolved_artifact_id", artifactID),
+			)
+			g.metadataCache.set(key, meta.artifactID, meta.headSHA)
+			g.registerFs(key, fs)
+			return fs, nil
+		}
 	}
 
 	// check if we already have this artifact cached
