@@ -108,4 +108,6 @@ the github token needs Actions (read) + Pull requests (read) permissions (fine-g
 
 the `host_re` regex (default `^pr-(.+?)\.(.+)$`) extracts the key from the hostname. if the captured value is all digits it resolves as a PR number, otherwise as a branch name. `pr-42.preview.oku.trade` resolves PR #42, `pr-master.preview.oku.trade` resolves the `master` branch.
 
+resolution looks up the current head commit of the PR or branch and finds its workflow runs by `head_sha`, because GitHub's branch-filtered run listing can return stale results ([community#206725](https://github.com/orgs/community/discussions/206725)). the branch listing is only a fallback while the head build has no artifact yet, and it never replaces a cached artifact with an older one. if resolution fails, the last cached artifact keeps being served and resolution is retried after the metadata TTL.
+
 a management API is available at `/.well-known/github-preview/` (protected by `api_key` via `X-Api-Key` header): POST `/refresh` to warm the cache, DELETE `/refresh` to evict, GET `/status` to list cached entries. a public debug endpoint at `/.well-known/deployment-debug` shows cache state for the current hostname.

@@ -48,7 +48,7 @@ func staleRunsServer(t *testing.T, headSHA string, headRuns []ghWorkflowRun) *ht
 func TestResolveBranchPrefersHeadSHA(t *testing.T) {
 	t.Run("head_sha lookup wins over stale branch listing", func(t *testing.T) {
 		srv := staleRunsServer(t, "fresh", []ghWorkflowRun{
-			{ID: 20, HeadSHA: "fresh", CreatedAt: "2026-10-08T00:00:00Z"},
+			{ID: 20, HeadBranch: "feature/x", HeadSHA: "fresh", CreatedAt: "2026-10-08T00:00:00Z"},
 		})
 		defer srv.Close()
 
@@ -82,6 +82,44 @@ func TestListRunsSortsNewestFirst(t *testing.T) {
 	require.Equal(t, []int64{3, 2, 1}, []int64{runs[0].ID, runs[1].ID, runs[2].ID})
 }
 
+func TestRunsForBranch(t *testing.T) {
+	runs := runsForBranch([]ghWorkflowRun{
+		{ID: 1, HeadBranch: "other"},
+		{ID: 2, HeadBranch: "master"},
+	}, "master")
+	require.Len(t, runs, 1)
+	require.Equal(t, int64(2), runs[0].ID)
+}
+
+func TestResolveFailureServesCachedArtifact(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+
+	g := &GithubPreview{
+		metadataCache: newMetadataCache(time.Nanosecond),
+		artifactCache: newArtifactCache(10),
+		client:        newTestClient(srv.URL),
+		log:           zap.NewNop(),
+		refreshActive: map[string]bool{},
+	}
+	key := "branch:master"
+	g.artifactCache.set(42, afero.NewMemMapFs(), 0, nil)
+	g.metadataCache.set(key, 42, "sha")
+	time.Sleep(time.Millisecond)
+
+	_, err := g.resolveAndRegister(context.Background(), key)
+	require.NoError(t, err)
+	meta, _ := g.metadataCache.get(key)
+	require.Equal(t, int64(42), meta.artifactID)
+	require.WithinDuration(t, time.Now(), meta.resolvedAt, time.Second)
+
+	// no cached entry: error propagates
+	_, err = g.resolveAndRegister(context.Background(), "branch:other")
+	require.Error(t, err)
+}
+
 func TestFullResolveDoesNotRegressToOlderArtifact(t *testing.T) {
 	newPreview := func(url string) *GithubPreview {
 		return &GithubPreview{
@@ -111,7 +149,7 @@ func TestFullResolveDoesNotRegressToOlderArtifact(t *testing.T) {
 	})
 
 	t.Run("exact head match is trusted even if older", func(t *testing.T) {
-		srv := staleRunsServer(t, "fresh", []ghWorkflowRun{{ID: 20, HeadSHA: "fresh"}})
+		srv := staleRunsServer(t, "fresh", []ghWorkflowRun{{ID: 20, HeadBranch: "feature/x", HeadSHA: "fresh"}})
 		defer srv.Close()
 
 		g := newPreview(srv.URL)

@@ -48,7 +48,19 @@ func (c *MetadataCache) get(key string) (entry *metadataEntry, fresh bool) {
 	if !ok {
 		return nil, false
 	}
-	return e, !e.isStale(c.ttl)
+	// return a copy so callers can't race with concurrent set/touch
+	cp := *e
+	return &cp, !cp.isStale(c.ttl)
+}
+
+// touch marks an entry as freshly resolved without changing it, so a failed
+// re-resolve is retried after the TTL instead of on every request.
+func (c *MetadataCache) touch(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e := c.entries[key]; e != nil {
+		e.resolvedAt = time.Now()
+	}
 }
 
 func (c *MetadataCache) set(key string, artifactID int64, headSHA string) {

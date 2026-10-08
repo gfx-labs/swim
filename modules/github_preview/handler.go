@@ -381,6 +381,20 @@ func (g *GithubPreview) resolveAndRegister(ctx context.Context, key string) (str
 		return fs, nil
 	})
 	if err != nil {
+		// keep serving the last good artifact if GitHub is erroring or the
+		// head build isn't ready, and retry after the metadata TTL
+		if meta, _ := g.metadataCache.get(key); meta != nil {
+			if fs, ok := g.artifactCache.get(meta.artifactID); ok {
+				g.log.Warn("resolve failed, serving cached artifact",
+					zap.String("key", key),
+					zap.Int64("artifact_id", meta.artifactID),
+					zap.Error(err),
+				)
+				g.metadataCache.touch(key)
+				g.registerFs(key, fs)
+				return regKey, nil
+			}
+		}
 		return "", err
 	}
 	return regKey, nil

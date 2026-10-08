@@ -205,7 +205,7 @@ func (c *GithubClient) resolveArtifactAt(ctx context.Context, branch, headSHA st
 		runs, err := c.listRuns(ctx, "head_sha="+url.QueryEscape(headSHA))
 		if err != nil {
 			c.log.Debug("head_sha run lookup failed", zap.String("head_sha", headSHA), zap.Error(err))
-		} else if run, a := c.findArtifact(ctx, runs); a != nil {
+		} else if run, a := c.findArtifact(ctx, runsForBranch(runs, branch)); a != nil {
 			return run, a, nil
 		}
 	}
@@ -245,13 +245,25 @@ func (c *GithubClient) listRuns(ctx context.Context, filter string) ([]ghWorkflo
 	return runs, nil
 }
 
+// runsForBranch keeps runs built for the given branch, since the same commit
+// may also have been built on another branch.
+func runsForBranch(runs []ghWorkflowRun, branch string) []ghWorkflowRun {
+	out := runs[:0:0]
+	for _, r := range runs {
+		if r.HeadBranch == branch {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // findArtifact returns the first run (in order) that has a non-expired
 // artifact with the configured name.
 func (c *GithubClient) findArtifact(ctx context.Context, runs []ghWorkflowRun) (*ghWorkflowRun, *ghArtifact) {
 	for i := range runs {
 		run := &runs[i]
 
-		artifactsURL := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d/artifacts",
+		artifactsURL := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d/artifacts?per_page=100",
 			c.apiURL, c.owner, c.repo, run.ID)
 
 		var artifactsResp ghArtifactsResponse
