@@ -63,7 +63,6 @@ var defaultCrawlerUserAgents = [...]string{
 	"showyoubot",
 	"outbrain",
 	"pinterest/0.",
-	"pinterest",
 	"developers.google.com/+/web/snippet",
 	"slackbot",
 	"vkShare",
@@ -82,7 +81,6 @@ var defaultCrawlerUserAgents = [...]string{
 	"quantbot",
 	"ecosia",
 	"pinterestbot",
-	"instagram",
 	"duckduckbot",
 	"duckassistbot",
 	"Bitrix link preview",
@@ -91,7 +89,6 @@ var defaultCrawlerUserAgents = [...]string{
 	"deepcrawl",
 	"lumar",
 
-	"tiktok",
 	"tiktokspider",
 	"bytespider",
 	//
